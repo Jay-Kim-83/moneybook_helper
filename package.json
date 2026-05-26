@@ -1,0 +1,10 @@
+{
+    "name": "moneybook",
+    "version": "1.0.0",
+    "description": "가계부 작성 도우미 (의존성 없음)",
+    "main": "server.js",
+    "scripts": {
+        "start": "node server.js",
+        "dev": "node --watch server.js"
+    }
+}
