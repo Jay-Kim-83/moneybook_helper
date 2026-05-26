@@ -2,13 +2,17 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 
 const PORT = process.env.PORT || 3000;
 const IS_PROD = process.env.NODE_ENV === "production";
+const RESTART_CODE = 42;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "db.json");
-const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], monthly: [] };
+const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
+const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
+const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [] };
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4"],
@@ -17,8 +21,19 @@ const FIELDS = {
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const ensureDir = (dir) => fs.existsSync(dir) || fs.mkdirSync(dir, { recursive: true });
+
+const parseJson = (raw) => JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
+
 const SESSION_TTL = 7 * 24 * 60 * 60 * 1000;
+const SESSION_SECRET = (() => {
+    if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+    ensureDir(DATA_DIR);
+    if (fs.existsSync(SECRET_PATH)) return fs.readFileSync(SECRET_PATH, "utf-8").trim();
+    const secret = crypto.randomBytes(32).toString("hex");
+    fs.writeFileSync(SECRET_PATH, secret);
+    return secret;
+})();
 let adminPassword = process.env.ADMIN_PASSWORD || "";
 if (!adminPassword && !IS_PROD) {
     adminPassword = "moneybook";
@@ -27,14 +42,38 @@ if (!adminPassword && !IS_PROD) {
 
 const readDB = () => {
     if (!fs.existsSync(DB_PATH)) {
-        fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+        ensureDir(DATA_DIR);
         fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_DATA, null, 4));
     }
-    const raw = fs.readFileSync(DB_PATH, "utf-8");
-    return { ...DEFAULT_DATA, ...JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw) };
+    return { ...DEFAULT_DATA, ...parseJson(fs.readFileSync(DB_PATH, "utf-8")) };
 };
 
 const writeDB = (data) => fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 4));
+
+const isMonth = (m) => /^\d{4}-\d{2}$/.test(m);
+const monthlyFile = (m) => path.join(MONTHLY_DIR, `${m}.json`);
+const readMonthly = (m) => (isMonth(m) && fs.existsSync(monthlyFile(m)) ? parseJson(fs.readFileSync(monthlyFile(m), "utf-8")) : null);
+const listMonthly = () => {
+    ensureDir(MONTHLY_DIR);
+    return fs
+        .readdirSync(MONTHLY_DIR)
+        .filter((f) => f.endsWith(".json"))
+        .map((f) => parseJson(fs.readFileSync(path.join(MONTHLY_DIR, f), "utf-8")))
+        .sort((a, b) => b.month.localeCompare(a.month));
+};
+
+const migrateMonthly = () => {
+    ensureDir(MONTHLY_DIR);
+    if (!fs.existsSync(DB_PATH)) return;
+    const db = parseJson(fs.readFileSync(DB_PATH, "utf-8"));
+    if (Array.isArray(db.monthly) && db.monthly.length) {
+        for (const rec of db.monthly) if (rec && isMonth(rec.month)) fs.writeFileSync(monthlyFile(rec.month), JSON.stringify(rec, null, 4));
+    }
+    if ("monthly" in db) {
+        delete db.monthly;
+        writeDB(db);
+    }
+};
 
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -65,9 +104,7 @@ const normalize = (collection, body) => {
 };
 
 const sign = (value) => `${value}.${crypto.createHmac("sha256", SESSION_SECRET).update(value).digest("base64url")}`;
-
 const issueToken = () => sign(String(Date.now() + SESSION_TTL));
-
 const validToken = (signed) => {
     if (!signed || !signed.includes(".")) return false;
     const value = signed.slice(0, signed.lastIndexOf("."));
@@ -79,23 +116,52 @@ const validToken = (signed) => {
     }
     return Number(value) > Date.now();
 };
-
 const getCookie = (req, name) => {
     const found = (req.headers.cookie || "").split(";").map((s) => s.trim()).find((s) => s.startsWith(`${name}=`));
     return found ? decodeURIComponent(found.slice(name.length + 1)) : null;
 };
-
 const isAuthed = (req) => validToken(getCookie(req, "session"));
-
 const sessionCookie = (token) => {
     const parts = [`session=${token}`, "HttpOnly", "Path=/", "SameSite=Lax", `Max-Age=${SESSION_TTL / 1000}`];
     if (IS_PROD) parts.push("Secure");
     return parts.join("; ");
 };
-
 const safeEqual = (a, b) => {
     const ab = Buffer.from(String(a)), bb = Buffer.from(String(b));
     return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+};
+
+const git = (args) =>
+    new Promise((resolve) => {
+        execFile("git", args, { cwd: __dirname, maxBuffer: 4 * 1024 * 1024 }, (err, stdout, stderr) => {
+            resolve({ ok: !err, out: `${stdout || ""}${stderr || ""}`.trim() });
+        });
+    });
+
+const systemInfo = async () => {
+    const status = await git(["status", "--porcelain"]);
+    return {
+        node: process.version,
+        branch: (await git(["rev-parse", "--abbrev-ref", "HEAD"])).out || "(git 아님)",
+        lastCommit: (await git(["log", "-1", "--pretty=%h  %s  (%cr)"])).out || "(커밋 없음)",
+        changes: status.out ? status.out.split("\n").filter(Boolean).length : 0,
+        production: IS_PROD,
+    };
+};
+
+const deploy = async (message) => {
+    const msg = (message && message.trim()) || `update ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+    let log = "";
+    const run = async (args) => {
+        const r = await git(args);
+        log += `$ git ${args.join(" ")}\n${r.out || "(출력 없음)"}\n\n`;
+        return r;
+    };
+    await run(["add", "-A"]);
+    const commit = await run(["commit", "-m", msg]);
+    if (!commit.ok && !/nothing to commit/i.test(commit.out)) return { ok: false, log };
+    const push = await run(["push"]);
+    return { ok: push.ok, log };
 };
 
 const handleAuth = async (req, res, action) => {
@@ -113,6 +179,19 @@ const handleAuth = async (req, res, action) => {
     send(res, 404, { error: "잘못된 요청" });
 };
 
+const handleSystem = async (req, res, action) => {
+    if (action === "info" && req.method === "GET") return send(res, 200, await systemInfo());
+    if (action === "deploy" && req.method === "POST") {
+        const { message } = await readBody(req);
+        return send(res, 200, await deploy(message));
+    }
+    if (action === "restart" && req.method === "POST") {
+        send(res, 200, { ok: true });
+        return setTimeout(() => process.exit(RESTART_CODE), 200);
+    }
+    send(res, 404, { error: "잘못된 요청" });
+};
+
 const handleApi = async (req, res, parts) => {
     const [, collection, id] = parts;
     const method = req.method;
@@ -120,16 +199,17 @@ const handleApi = async (req, res, parts) => {
     if (collection === "data" && method === "GET") return send(res, 200, readDB());
 
     if (collection === "monthly") {
-        const db = readDB();
-        if (method === "GET") return send(res, 200, db.monthly.find((m) => m.month === id) || null);
+        if (method === "GET") return send(res, 200, id ? readMonthly(id) : listMonthly());
         if (method === "POST") {
             const body = await readBody(req);
-            const idx = db.monthly.findIndex((m) => m.month === body.month);
-            if (idx === -1) db.monthly.push(body);
-            else db.monthly[idx] = body;
-            db.monthly.sort((a, b) => b.month.localeCompare(a.month));
-            writeDB(db);
+            if (!isMonth(body.month)) return send(res, 400, { error: "잘못된 월 형식" });
+            ensureDir(MONTHLY_DIR);
+            fs.writeFileSync(monthlyFile(body.month), JSON.stringify(body, null, 4));
             return send(res, 200, body);
+        }
+        if (method === "DELETE") {
+            if (isMonth(id) && fs.existsSync(monthlyFile(id))) fs.unlinkSync(monthlyFile(id));
+            return send(res, 200, { ok: true });
         }
     }
 
@@ -173,12 +253,15 @@ const serveStatic = (req, res, urlPath) => {
     fs.createReadStream(filePath).pipe(res);
 };
 
+migrateMonthly();
+
 http.createServer(async (req, res) => {
     try {
         const urlPath = req.url.split("?")[0];
         if (urlPath === "/api/login" || urlPath === "/api/logout") return await handleAuth(req, res, urlPath.split("/")[2]);
         if (urlPath.startsWith("/api/")) {
             if (!isAuthed(req)) return send(res, 401, { error: "로그인이 필요합니다" });
+            if (urlPath.startsWith("/api/system/")) return await handleSystem(req, res, urlPath.split("/")[3]);
             return await handleApi(req, res, urlPath.split("/").slice(1));
         }
         if ((urlPath === "/" || urlPath === "/index.html") && !isAuthed(req)) {
