@@ -16,6 +16,24 @@ const api = async (method, url, body) => {
 
 const won = (n) => `${new Intl.NumberFormat("ko-KR").format(Number(n) || 0)}원`;
 
+const toNum = (v) => Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0;
+
+const comma = (v) => {
+    const digits = String(v ?? "").replace(/[^\d]/g, "");
+    return digits ? Number(digits).toLocaleString("ko-KR") : "";
+};
+
+function formatMoneyInput(el) {
+    const digitsBeforeCaret = el.value.slice(0, el.selectionStart).replace(/[^\d]/g, "").length;
+    el.value = comma(el.value);
+    let pos = 0, seen = 0;
+    while (pos < el.value.length && seen < digitsBeforeCaret) {
+        if (el.value.charCodeAt(pos) >= 48 && el.value.charCodeAt(pos) <= 57) seen++;
+        pos++;
+    }
+    el.setSelectionRange(pos, pos);
+}
+
 const last4 = (n) => (n ? `•••• ${n}` : "-");
 
 const bankName = (id) => DB.banks.find((b) => b.id === id)?.name || "미지정";
@@ -45,6 +63,9 @@ const formModal = async ({ title, fields, values = {} }) => {
                 const opts = f.options.map((o) => `<option value="${o.value}" ${o.value === v ? "selected" : ""}>${o.label}</option>`).join("");
                 return `${label}<select id="f_${f.name}" class="swal2-input !m-0 !w-full !flex">${opts}</select>`;
             }
+            if (f.type === "number") {
+                return `${label}<input id="f_${f.name}" type="text" inputmode="numeric" value="${comma(v)}" placeholder="${f.label}" oninput="formatMoneyInput(this)" class="swal2-input !m-0 !w-full" />`;
+            }
             return `${label}<input id="f_${f.name}" type="${f.type || "text"}" value="${v}" placeholder="${f.label}" class="swal2-input !m-0 !w-full" />`;
         })
         .join("");
@@ -65,7 +86,7 @@ const formModal = async ({ title, fields, values = {} }) => {
                     Swal.showValidationMessage(`${f.label}을(를) 입력하세요`);
                     return false;
                 }
-                result[f.name] = f.type === "number" ? Number(raw) || 0 : raw;
+                result[f.name] = f.type === "number" ? toNum(raw) : raw;
             }
             return result;
         },
@@ -309,7 +330,7 @@ async function renderMonthly() {
               .map(
                   (b) => `<div class="flex items-center justify-between gap-3 py-2">
             <span class="text-slate-700">🏦 ${b.name}</span>
-            <input data-balance="${b.id}" value="${current.balances?.[b.id] ?? ""}" type="number" placeholder="잔액"
+            <input data-balance="${b.id}" value="${comma(current.balances?.[b.id] ?? "")}" type="text" inputmode="numeric" placeholder="잔액" oninput="formatMoneyInput(this); renderSummary()"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
         </div>`
               )
@@ -324,7 +345,7 @@ async function renderMonthly() {
                   return `<div class="py-2 border-b border-slate-100 last:border-0">
             <div class="flex items-center justify-between gap-3">
                 <span class="text-slate-700">💳 ${c.company} <span class="text-xs text-slate-400">(${bankName(c.bankId)})</span></span>
-                <input data-payment="${c.id}" data-prev="${prev ?? ""}" value="${curVal}" type="number" placeholder="결제 금액" oninput="updateDiff('${c.id}')"
+                <input data-payment="${c.id}" data-prev="${prev ?? ""}" value="${comma(curVal)}" type="text" inputmode="numeric" placeholder="결제 금액" oninput="formatMoneyInput(this); updateDiff('${c.id}')"
                     class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
             </div>
             <p data-diff="${c.id}" class="text-xs text-right mt-1 text-slate-400">${diffText(curVal, prev)}</p>
@@ -365,7 +386,7 @@ async function renderMonthly() {
 
 const diffText = (cur, prev) => {
     if (prev === undefined || prev === null || prev === "" || cur === "" || cur === undefined) return "전월 기록 없음";
-    const d = Number(cur) - Number(prev);
+    const d = toNum(cur) - Number(prev);
     if (d === 0) return `전월과 동일 (${won(prev)})`;
     return d > 0 ? `▲ 전월 대비 ${won(d)} 더 지출` : `▼ 전월 대비 ${won(-d)} 절약`;
 };
@@ -377,7 +398,7 @@ function updateDiff(cardId) {
     const el = document.querySelector(`[data-diff="${cardId}"]`);
     const cur = input.value;
     el.textContent = diffText(cur, prev);
-    el.className = "text-xs text-right mt-1 " + (cur === "" || prev === null ? "text-slate-400" : Number(cur) - prev > 0 ? "text-red-500" : Number(cur) - prev < 0 ? "text-green-600" : "text-slate-400");
+    el.className = "text-xs text-right mt-1 " + (cur === "" || prev === null ? "text-slate-400" : toNum(cur) - prev > 0 ? "text-red-500" : toNum(cur) - prev < 0 ? "text-green-600" : "text-slate-400");
     renderSummary();
 }
 
@@ -389,7 +410,7 @@ function renderMonthlyExpenses() {
               .map(
                   (e, i) => `<div class="flex items-center gap-3 py-2 border-b border-slate-100 last:border-0">
             <span class="flex-1 text-slate-700">${e.name} <span class="text-xs text-slate-400">(${bankName(e.bankId)})</span></span>
-            <input data-expense="${i}" value="${e.amount}" type="number" oninput="onExpenseInput(${i}, this.value)"
+            <input data-expense="${i}" value="${comma(e.amount)}" type="text" inputmode="numeric" oninput="formatMoneyInput(this); onExpenseInput(${i}, this.value)"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 w-36 text-right" />
             <button onclick="removeMonthlyExpense(${i})" class="text-red-500 text-sm hover:underline">삭제</button>
         </div>`
@@ -399,7 +420,7 @@ function renderMonthlyExpenses() {
 }
 
 const onExpenseInput = (i, val) => {
-    window._monthlyExpenses[i].amount = Number(val) || 0;
+    window._monthlyExpenses[i].amount = toNum(val);
     renderSummary();
 };
 
@@ -425,28 +446,74 @@ async function addMonthlyExpense() {
 }
 
 function renderSummary() {
-    const balances = [...document.querySelectorAll("[data-balance]")].reduce((s, el) => s + (Number(el.value) || 0), 0);
-    const payments = [...document.querySelectorAll("[data-payment]")].reduce((s, el) => s + (Number(el.value) || 0), 0);
-    const expenses = window._monthlyExpenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-    const remain = balances - payments - expenses;
-    const item = (label, val, color) => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-lg font-bold ${color}">${won(val)}</p></div>`;
-    document.getElementById("monthlySummary").innerHTML = card(`
-        <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            ${item("총 잔액", balances, "text-slate-800")}
-            ${item("카드 결제", payments, "text-red-500")}
-            ${item("카드 외 지출", expenses, "text-orange-500")}
-            ${item("예상 잔액", remain, remain >= 0 ? "text-green-600" : "text-red-600")}
-        </div>`);
+    const balanceOf = (id) => toNum(document.querySelector(`[data-balance="${id}"]`)?.value);
+    const sumByBank = (entries, idKey, amountFn) =>
+        entries.reduce((acc, e) => {
+            const bankId = idKey(e);
+            if (bankId) acc[bankId] = (acc[bankId] || 0) + amountFn(e);
+            return acc;
+        }, {});
+    const paymentByBank = sumByBank(
+        [...document.querySelectorAll("[data-payment]")],
+        (el) => DB.cards.find((c) => c.id === el.dataset.payment)?.bankId,
+        (el) => toNum(el.value)
+    );
+    const expenseByBank = sumByBank(window._monthlyExpenses, (e) => e.bankId, (e) => toNum(e.amount));
+
+    const remainClass = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
+    const num = (v, cls = "text-slate-700") => `<td class="text-right py-2 px-2 tabular-nums ${cls}">${won(v)}</td>`;
+    const totals = { bal: 0, pay: 0, exp: 0 };
+    const rows = DB.banks
+        .map((b) => {
+            const bal = balanceOf(b.id), pay = paymentByBank[b.id] || 0, exp = expenseByBank[b.id] || 0;
+            const remain = bal - pay - exp;
+            totals.bal += bal;
+            totals.pay += pay;
+            totals.exp += exp;
+            return `<tr class="border-b border-slate-100">
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
+                ${num(bal)}${num(pay, "text-red-500")}${num(exp, "text-orange-500")}
+                ${num(remain, `font-bold ${remainClass(remain)}`)}
+            </tr>`;
+        })
+        .join("");
+    const totalRemain = totals.bal - totals.pay - totals.exp;
+
+    document.getElementById("monthlySummary").innerHTML = DB.banks.length
+        ? card(`
+        <h3 class="font-bold text-slate-700 mb-3">④ 은행별 남는 금액 <span class="text-xs font-normal text-slate-400">(잔액 − 카드결제 − 카드외지출)</span></h3>
+        <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+                <thead>
+                    <tr class="text-slate-500 border-b-2 border-slate-200">
+                        <th class="text-left py-2 px-2">은행</th>
+                        <th class="text-right py-2 px-2">잔액</th>
+                        <th class="text-right py-2 px-2">카드 결제</th>
+                        <th class="text-right py-2 px-2">카드 외</th>
+                        <th class="text-right py-2 px-2">남는 금액</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+                <tfoot>
+                    <tr class="border-t-2 border-slate-300 bg-slate-50">
+                        <td class="py-2.5 px-2 font-bold text-slate-800">합계</td>
+                        ${num(totals.bal, "font-bold text-slate-800")}${num(totals.pay, "font-bold text-red-500")}${num(totals.exp, "font-bold text-orange-500")}
+                        ${num(totalRemain, `text-base font-bold ${remainClass(totalRemain)}`)}
+                    </tr>
+                </tfoot>
+            </table>
+        </div>`)
+        : "";
 }
 
 async function saveMonthly() {
     const balances = {};
     document.querySelectorAll("[data-balance]").forEach((el) => {
-        if (el.value !== "") balances[el.dataset.balance] = Number(el.value) || 0;
+        if (el.value !== "") balances[el.dataset.balance] = toNum(el.value);
     });
     const payments = {};
     document.querySelectorAll("[data-payment]").forEach((el) => {
-        if (el.value !== "") payments[el.dataset.payment] = Number(el.value) || 0;
+        if (el.value !== "") payments[el.dataset.payment] = toNum(el.value);
     });
     await api("POST", "/api/monthly", { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses });
     await reload();
