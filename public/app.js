@@ -465,24 +465,40 @@ const sumExpenses = (arr) => (arr || []).reduce((s, e) => s + (Number(e.amount) 
 const histItem = (label, val, color) => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-base font-bold ${color}">${won(val)}</p></div>`;
 
 let historyChart = null;
+const CHART_PALETTE = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1", "#a855f7", "#ec4899", "#14b8a6", "#f59e0b"];
+const cardLabel = (id) => {
+    const c = DB.cards.find((x) => x.id === id);
+    return c ? c.alias || c.company : `삭제된 카드(${id.slice(-4)})`;
+};
 
 function renderHistoryChart(records) {
     const ctx = document.getElementById("historyChart");
     if (!ctx || typeof Chart === "undefined") return;
     if (historyChart) historyChart.destroy();
-    const pay = records.map((r) => sumValues(r.payments));
-    const exp = records.map((r) => sumExpenses(r.expenses));
-    const bal = records.map((r) => sumValues(r.balances));
+    const cardIds = [...new Set(records.flatMap((r) => Object.keys(r.payments || {})))];
+    const cardBars = cardIds.map((id, i) => ({
+        type: "bar",
+        label: `💳 ${cardLabel(id)}`,
+        stack: "지출",
+        data: records.map((r) => (r.payments && r.payments[id]) || 0),
+        backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
+        borderRadius: 3,
+    }));
+    const expBar = { type: "bar", label: "카드 외 지출", stack: "지출", data: records.map((r) => sumExpenses(r.expenses)), backgroundColor: "#94a3b8", borderRadius: 3 };
+    const balLine = { type: "line", label: "총 잔액", stack: "_bal", data: records.map((r) => sumValues(r.balances)), borderColor: "#0f172a", borderWidth: 2, tension: 0.3, pointRadius: 3 };
+    const remainLine = {
+        type: "line",
+        label: "예상 잔액",
+        stack: "_remain",
+        data: records.map((r) => sumValues(r.balances) - sumValues(r.payments) - sumExpenses(r.expenses)),
+        borderColor: "#16a34a",
+        borderWidth: 2,
+        borderDash: [5, 4],
+        tension: 0.3,
+        pointRadius: 3,
+    };
     historyChart = new Chart(ctx, {
-        data: {
-            labels: records.map((r) => r.month),
-            datasets: [
-                { type: "bar", label: "카드 결제", data: pay, backgroundColor: "#ef4444cc", borderRadius: 4 },
-                { type: "bar", label: "카드 외 지출", data: exp, backgroundColor: "#f97316cc", borderRadius: 4 },
-                { type: "line", label: "총 잔액", data: bal, borderColor: "#475569", backgroundColor: "#475569", borderWidth: 2, tension: 0.3 },
-                { type: "line", label: "예상 잔액", data: bal.map((b, i) => b - pay[i] - exp[i]), borderColor: "#16a34a", backgroundColor: "#16a34a", borderWidth: 2, tension: 0.3 },
-            ],
-        },
+        data: { labels: records.map((r) => r.month), datasets: [...cardBars, expBar, balLine, remainLine] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
@@ -491,7 +507,10 @@ function renderHistoryChart(records) {
                 legend: { labels: { boxWidth: 14, font: { family: "Noto Sans KR" } } },
                 tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${won(c.parsed.y)}` } },
             },
-            scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${Math.round(v / 10000)}만` } } },
+            scales: {
+                x: { stacked: true },
+                y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => `${Math.round(v / 10000)}만` } },
+            },
         },
     });
 }
@@ -521,7 +540,10 @@ async function renderHistory() {
               .join("")
         : emptyState("저장된 결제 이력이 없습니다. '이번달 결제'에서 입력 후 저장하세요.");
     const chart = records.length
-        ? card(`<h3 class="font-bold text-slate-700 mb-3">월별 추이</h3><div class="relative h-72"><canvas id="historyChart"></canvas></div>`)
+        ? card(`<div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+            <h3 class="font-bold text-slate-700">월별 추이 <span class="text-xs font-normal text-slate-400">(카드별 누적 막대 + 잔액 추이선)</span></h3>
+            <span class="text-xs text-slate-400">범례를 클릭하면 항목을 숨기거나 표시할 수 있어요</span>
+        </div><div class="relative h-80"><canvas id="historyChart"></canvas></div>`)
         : "";
     document.getElementById("tab-history").innerHTML =
         `<h2 class="text-lg font-bold text-slate-700 mb-4">결제 이력 (월별 저장)</h2>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
