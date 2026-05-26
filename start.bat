@@ -7,7 +7,7 @@ echo   Press Ctrl + C in this window to stop
 echo ============================================
 start "" http://localhost:3000
 :loop
-node server.js
+node --env-file-if-exists=.env server.js
 if "%errorlevel%"=="42" (
     echo Restarting server...
     goto loop
