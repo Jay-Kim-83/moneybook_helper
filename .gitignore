@@ -5,5 +5,6 @@ data/
 .history/
 .vscode/
 *.log
+*.code-workspace
 .DS_Store
 Thumbs.db
