@@ -464,6 +464,38 @@ const sumValues = (obj) => Object.values(obj || {}).reduce((s, v) => s + (Number
 const sumExpenses = (arr) => (arr || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
 const histItem = (label, val, color) => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-base font-bold ${color}">${won(val)}</p></div>`;
 
+let historyChart = null;
+
+function renderHistoryChart(records) {
+    const ctx = document.getElementById("historyChart");
+    if (!ctx || typeof Chart === "undefined") return;
+    if (historyChart) historyChart.destroy();
+    const pay = records.map((r) => sumValues(r.payments));
+    const exp = records.map((r) => sumExpenses(r.expenses));
+    const bal = records.map((r) => sumValues(r.balances));
+    historyChart = new Chart(ctx, {
+        data: {
+            labels: records.map((r) => r.month),
+            datasets: [
+                { type: "bar", label: "카드 결제", data: pay, backgroundColor: "#ef4444cc", borderRadius: 4 },
+                { type: "bar", label: "카드 외 지출", data: exp, backgroundColor: "#f97316cc", borderRadius: 4 },
+                { type: "line", label: "총 잔액", data: bal, borderColor: "#475569", backgroundColor: "#475569", borderWidth: 2, tension: 0.3 },
+                { type: "line", label: "예상 잔액", data: bal.map((b, i) => b - pay[i] - exp[i]), borderColor: "#16a34a", backgroundColor: "#16a34a", borderWidth: 2, tension: 0.3 },
+            ],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+                legend: { labels: { boxWidth: 14, font: { family: "Noto Sans KR" } } },
+                tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${won(c.parsed.y)}` } },
+            },
+            scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${Math.round(v / 10000)}만` } } },
+        },
+    });
+}
+
 async function renderHistory() {
     const records = await api("GET", "/api/monthly");
     const list = records.length
@@ -488,8 +520,12 @@ async function renderHistory() {
               })
               .join("")
         : emptyState("저장된 결제 이력이 없습니다. '이번달 결제'에서 입력 후 저장하세요.");
+    const chart = records.length
+        ? card(`<h3 class="font-bold text-slate-700 mb-3">월별 추이</h3><div class="relative h-72"><canvas id="historyChart"></canvas></div>`)
+        : "";
     document.getElementById("tab-history").innerHTML =
-        `<h2 class="text-lg font-bold text-slate-700 mb-4">결제 이력 (월별 저장)</h2><div class="grid gap-4">${list}</div>`;
+        `<h2 class="text-lg font-bold text-slate-700 mb-4">결제 이력 (월별 저장)</h2>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
+    if (records.length) renderHistoryChart([...records].sort((a, b) => a.month.localeCompare(b.month)));
 }
 
 function viewMonth(month) {
