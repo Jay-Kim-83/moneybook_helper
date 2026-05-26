@@ -6,11 +6,17 @@ const api = async (method, url, body) => {
         headers: { "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
     });
-    if (!res.ok) throw new Error((await res.json()).error || "요청 실패");
+    if (res.status === 401) {
+        location.href = "/login.html";
+        throw new Error("로그인이 필요합니다");
+    }
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "요청 실패");
     return res.json();
 };
 
 const won = (n) => `${new Intl.NumberFormat("ko-KR").format(Number(n) || 0)}원`;
+
+const last4 = (n) => (n ? `•••• ${n}` : "-");
 
 const bankName = (id) => DB.banks.find((b) => b.id === id)?.name || "미지정";
 
@@ -91,9 +97,8 @@ function renderBanks() {
                   (b) => card(`
             <div class="flex items-start justify-between">
                 <div>
-                    <p class="font-bold text-slate-800">${b.name}</p>
-                    <p class="text-sm text-slate-500 mt-1">계좌번호: ${b.accountNumber || "-"}</p>
-                    <p class="text-sm text-slate-500">비밀번호 힌트: ${b.passwordHint || "-"}</p>
+                    <p class="font-bold text-slate-800">${b.name}${b.alias ? ` <span class="text-sm font-normal text-slate-400">(${b.alias})</span>` : ""}</p>
+                    <p class="text-sm text-slate-500 mt-1">계좌 끝 4자리: ${last4(b.accountLast4)}</p>
                 </div>
                 <div class="flex gap-2 shrink-0">
                     <button onclick="editBank('${b.id}')" class="text-indigo-600 hover:underline text-sm">수정</button>
@@ -107,10 +112,10 @@ function renderBanks() {
         sectionHeader("나의 은행", "+ 은행 추가", "saveBank()") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
 }
 
-const bankFields = (v = {}) => [
+const bankFields = () => [
     { name: "name", label: "은행명", required: true },
-    { name: "accountNumber", label: "계좌번호" },
-    { name: "passwordHint", label: "비밀번호 힌트" },
+    { name: "alias", label: "별칭 (예: 생활비 통장)" },
+    { name: "accountLast4", label: "계좌 끝 4자리" },
 ];
 
 async function saveBank() {
@@ -146,9 +151,8 @@ function renderCards() {
                   (c) => card(`
             <div class="flex items-start justify-between">
                 <div>
-                    <p class="font-bold text-slate-800">${c.company}</p>
-                    <p class="text-sm text-slate-500 mt-1">카드번호: ${c.cardNumber || "-"}</p>
-                    <p class="text-sm text-slate-500">CVC: ${c.cvc || "-"}</p>
+                    <p class="font-bold text-slate-800">${c.company}${c.alias ? ` <span class="text-sm font-normal text-slate-400">(${c.alias})</span>` : ""}</p>
+                    <p class="text-sm text-slate-500 mt-1">카드 끝 4자리: ${last4(c.cardLast4)}</p>
                     <span class="inline-block mt-2 text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded">🏦 ${bankName(c.bankId)}</span>
                 </div>
                 <div class="flex gap-2 shrink-0">
@@ -165,8 +169,8 @@ function renderCards() {
 
 const cardFields = () => [
     { name: "company", label: "카드사", required: true },
-    { name: "cardNumber", label: "카드번호" },
-    { name: "cvc", label: "CVC" },
+    { name: "alias", label: "카드 별칭 (예: 주유 카드)" },
+    { name: "cardLast4", label: "카드 끝 4자리" },
     { name: "bankId", label: "연결 은행", type: "select", options: bankOptions() },
 ];
 
@@ -266,8 +270,8 @@ function renderOverview() {
                       ? `<div class="grid gap-2 sm:grid-cols-2 mt-3">${cards
                             .map(
                                 (c) => `<div class="bg-slate-50 rounded-lg p-3 border border-slate-200">
-                            <p class="font-medium text-slate-700">💳 ${c.company}</p>
-                            <p class="text-sm text-slate-500">${c.cardNumber || "-"}</p>
+                            <p class="font-medium text-slate-700">💳 ${c.company}${c.alias ? ` (${c.alias})` : ""}</p>
+                            <p class="text-sm text-slate-500">${last4(c.cardLast4)}</p>
                         </div>`
                             )
                             .join("")}</div>`
@@ -455,6 +459,11 @@ function renderAll() {
     renderFixed();
     renderOverview();
 }
+
+document.getElementById("logoutBtn").addEventListener("click", async () => {
+    await api("POST", "/api/logout");
+    location.href = "/login.html";
+});
 
 document.querySelectorAll(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
