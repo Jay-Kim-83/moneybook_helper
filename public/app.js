@@ -77,6 +77,7 @@ const formModal = async ({ title, fields, values = {} }) => {
         confirmButtonText: "저장",
         cancelButtonText: "취소",
         confirmButtonColor: "#4f46e5",
+        didOpen: () => document.getElementById(`f_${fields[0].name}`)?.focus(),
         preConfirm: () => {
             const result = {};
             for (const f of fields) {
@@ -738,7 +739,10 @@ async function runRestart() {
     });
 }
 
+let currentTab = "banks";
+
 function showTab(name) {
+    currentTab = name;
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
@@ -753,6 +757,17 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 });
 
 document.querySelectorAll(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
+
+const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed };
+document.addEventListener("keydown", (e) => {
+    if (e.key !== "+" || e.repeat || Swal.isVisible()) return;
+    const t = e.target;
+    if (t && (t.matches?.("input, textarea, select") || t.isContentEditable)) return;
+    const action = addActions[currentTab];
+    if (!action) return;
+    e.preventDefault();
+    action();
+});
 
 async function loadStorageBadge() {
     const el = document.getElementById("storageBadge");
