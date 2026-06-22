@@ -658,8 +658,10 @@ async function renderSystem() {
 async function loadSystemInfo() {
     try {
         const d = await api("GET", "/api/system/info");
+        const pg = d.storage === "postgres";
         document.getElementById("sysInfo").innerHTML = `
             <p>Node: <b>${d.node}</b> ${d.production ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">production</span>' : ""}</p>
+            <p>저장소: <b>${pg ? "Postgres (영구 저장)" : "파일 (임시 저장)"}</b> ${pg ? '<span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Neon 연결됨</span>' : '<span class="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded">DATABASE_URL 미설정</span>'}</p>
             <p>브랜치: <b>${d.branch}</b></p>
             <p>최근 커밋: ${d.lastCommit}</p>
             <p>변경된 파일: <b>${d.changes}</b>개</p>`;
@@ -752,4 +754,18 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
 document.querySelectorAll(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
 
+async function loadStorageBadge() {
+    const el = document.getElementById("storageBadge");
+    try {
+        const { storage } = await api("GET", "/api/system/info");
+        const pg = storage === "postgres";
+        el.textContent = pg ? "🟢 Postgres 영구 저장" : "🟠 파일 임시 저장";
+        el.className = `ml-auto text-xs font-medium px-2.5 py-1 rounded-full ${pg ? "bg-green-500 text-white" : "bg-amber-400 text-amber-900"}`;
+        el.title = pg ? "Neon Postgres에 저장 — 재배포·재시작해도 데이터 유지" : "DATABASE_URL 미설정 — 재배포/재시작 시 데이터 소실 위험";
+    } catch {
+        el.textContent = "저장소 확인 실패";
+    }
+}
+
 reload();
+loadStorageBadge();
