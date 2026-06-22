@@ -746,6 +746,7 @@ let currentTab = "banks";
 
 function showTab(name) {
     currentTab = name;
+    localStorage.setItem("activeTab", name);
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
@@ -785,5 +786,9 @@ async function loadStorageBadge() {
     }
 }
 
-reload();
+(async () => {
+    await reload();
+    const saved = localStorage.getItem("activeTab");
+    if (saved && document.getElementById(`tab-${saved}`)) showTab(saved);
+})();
 loadStorageBadge();
