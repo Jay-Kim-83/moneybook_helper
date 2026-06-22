@@ -19,8 +19,10 @@ const won = (n) => `${new Intl.NumberFormat("ko-KR").format(Number(n) || 0)}원`
 const toNum = (v) => Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0;
 
 const comma = (v) => {
-    const digits = String(v ?? "").replace(/[^\d]/g, "");
-    return digits ? Number(digits).toLocaleString("ko-KR") : "";
+    const s = String(v ?? "");
+    const neg = /^\s*-/.test(s) ? "-" : "";
+    const digits = s.replace(/[^\d]/g, "");
+    return digits ? neg + Number(digits).toLocaleString("ko-KR") : neg;
 };
 
 function formatMoneyInput(el) {
@@ -31,6 +33,7 @@ function formatMoneyInput(el) {
         if (el.value.charCodeAt(pos) >= 48 && el.value.charCodeAt(pos) <= 57) seen++;
         pos++;
     }
+    if (pos === 0 && el.value.startsWith("-")) pos = 1;
     el.setSelectionRange(pos, pos);
 }
 
