@@ -440,7 +440,7 @@ async function renderMonthly() {
     const previous = await api("GET", `/api/monthly/${prevMonth(selectedMonth)}`);
     window._monthlyExpenses = current.expenses?.length
         ? current.expenses
-        : DB.fixedExpenses.map((e) => ({ name: e.name, amount: e.amount, bankId: e.bankId }));
+        : DB.fixedExpenses.map((e) => ({ name: e.name, amount: e.amount, bankId: e.bankId, memo: e.description || "" }));
     window._transfersDone = current.transfersDone || {};
 
     const balanceRows = DB.banks.length
@@ -526,11 +526,18 @@ function renderMonthlyExpenses() {
     wrap.innerHTML = list.length
         ? list
               .map(
-                  (e, i) => `<div class="flex items-center gap-3 py-2 border-b border-slate-100 last:border-0">
-            <span class="flex-1 text-slate-700">${e.name} <span class="text-xs text-slate-400">(${bankName(e.bankId)})</span></span>
-            <input data-expense="${i}" value="${comma(e.amount)}" type="text" inputmode="numeric" oninput="formatMoneyInput(this); onExpenseInput(${i}, this.value)"
-                class="border border-slate-300 rounded-lg px-3 py-1.5 w-36 text-right" />
-            <button onclick="removeMonthlyExpense(${i})" class="text-red-500 text-sm hover:underline">삭제</button>
+                  (e, i) => `<div class="py-2 border-b border-slate-100 last:border-0">
+            <div class="flex items-center gap-3">
+                <span class="flex-1 text-slate-700">${e.name} <span class="text-xs text-slate-400">(${bankName(e.bankId)})</span></span>
+                <input data-expense="${i}" value="${comma(e.amount)}" type="text" inputmode="numeric" oninput="formatMoneyInput(this); onExpenseInput(${i}, this.value)"
+                    class="border border-slate-300 rounded-lg px-3 py-1.5 w-36 text-right" />
+                <button onclick="removeMonthlyExpense(${i})" class="text-red-500 text-sm hover:underline">삭제</button>
+            </div>
+            <div class="flex items-center gap-2 mt-1.5">
+                <input value="${String(e.memo ?? "").replace(/"/g, "&quot;")}" placeholder="메모 (예: 월세및관리비26.08(이창하, 선불) - 17회차)" oninput="onExpenseMemo(${i}, this.value)"
+                    class="flex-1 border border-slate-200 rounded-lg px-3 py-1 text-sm text-slate-600 placeholder:text-slate-300" />
+                <button onclick="copyExpenseMemo(${i})" class="text-slate-400 hover:text-indigo-600 text-sm shrink-0" title="메모 복사 (네이버가계부 붙여넣기용)">📋 복사</button>
+            </div>
         </div>`
               )
               .join("")
@@ -541,6 +548,19 @@ const onExpenseInput = (i, val) => {
     window._monthlyExpenses[i].amount = toNum(val);
     renderSummary();
 };
+
+const onExpenseMemo = (i, val) => (window._monthlyExpenses[i].memo = val);
+
+async function copyExpenseMemo(i) {
+    const memo = window._monthlyExpenses[i].memo || "";
+    if (!memo) return toast("info", "메모가 비어 있습니다");
+    try {
+        await navigator.clipboard.writeText(memo);
+        toast("success", "메모가 복사되었습니다");
+    } catch {
+        toast("error", "복사 실패 — 직접 선택해 주세요");
+    }
+}
 
 const removeMonthlyExpense = (i) => {
     window._monthlyExpenses.splice(i, 1);
@@ -555,6 +575,7 @@ async function addMonthlyExpense() {
             { name: "name", label: "지출명", required: true },
             { name: "amount", label: "금액", type: "number", required: true },
             { name: "bankId", label: "출금 은행", type: "select", options: bankOptions() },
+            { name: "memo", label: "메모 (예: 월세및관리비26.08(이창하, 선불) - 17회차)" },
         ],
     });
     if (!v) return;
