@@ -442,6 +442,7 @@ async function renderMonthly() {
         ? current.expenses
         : DB.fixedExpenses.map((e) => ({ name: e.name, amount: e.amount, bankId: e.bankId, memo: e.description || "" }));
     window._transfersDone = current.transfersDone || {};
+    window._transferLog = current.transferLog || [];
 
     const balanceRows = DB.banks.length
         ? DB.banks
@@ -631,9 +632,12 @@ function renderSummary() {
             if (t.kind === "expense") return t.fromId === bankId ? s - t.amount : s;
             return s + (t.toId === bankId ? t.amount : 0) - (t.fromId === bankId ? t.amount : 0);
         }, balanceOf(bankId));
+    window._planCtx = { items: plan.items, holdingOf };
     const planRows = plan.items
         .map((t, i) => {
-            const checked = !!done[t.key];
+            const d = done[t.key];
+            const checked = !!d;
+            const snap = d && typeof d === "object" ? d : null;
             const tag = (text, cls) => `<span class="text-xs px-1.5 py-0.5 rounded ${cls}">${text}</span>`;
             const isExp = t.kind === "expense";
             const title = isExp
@@ -642,9 +646,11 @@ function renderSummary() {
                     ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
                     ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
                     ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}`;
+            const fromBal = snap?.fromBal ?? holdingOf(t.fromId);
+            const time = snap?.at ? `${snap.at} ` : "";
             const log = isExp
-                ? `✓ 지출 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))}`
-                : `✓ 이체 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))} <span class="text-slate-300">|</span> ${bankName(t.toId)} 잔액 ${won(holdingOf(t.toId))}`;
+                ? `✓ ${time}지출 완료 — ${bankName(t.fromId)} 잔액 ${won(fromBal)}`
+                : `✓ ${time}이체 완료 — ${bankName(t.fromId)} 잔액 ${won(fromBal)} <span class="text-slate-300">|</span> ${bankName(t.toId)} 잔액 ${won(snap?.toBal ?? holdingOf(t.toId))}`;
             return `<label class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer">
                 <input type="checkbox" ${checked ? "checked" : ""} onchange="toggleTransferDone('${t.key}', this.checked)" class="w-4 h-4 accent-indigo-600 shrink-0" />
                 <span class="text-xs text-slate-400 w-4 text-right">${i + 1}</span>
@@ -689,7 +695,15 @@ function renderSummary() {
             <h3 class="font-bold text-slate-700">⑤ 이체 플랜 <span class="text-xs font-normal text-slate-400">(위에서부터 순서대로 이체하고 체크)</span></h3>
             ${plan.items.length ? `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${doneCount === plan.items.length ? "bg-green-100 text-green-700" : "bg-indigo-50 text-indigo-700"}">${doneCount}/${plan.items.length} 완료</span>` : ""}
         </div>
-        ${plan.items.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}`) +
+        ${plan.items.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}
+        ${(window._transferLog || []).length ? `
+        <div class="mt-3 pt-3 border-t border-slate-200">
+            <div class="flex items-center justify-between mb-1">
+                <span class="text-xs font-bold text-slate-500">📜 이체 로그</span>
+                <button onclick="clearTransferLog()" class="text-xs text-slate-400 hover:text-red-500 hover:underline">로그 지우기</button>
+            </div>
+            ${window._transferLog.map((l) => `<p class="text-xs py-0.5 ${l.undo ? "text-slate-400" : "text-slate-600"}"><span class="text-slate-400 tabular-nums">${l.at}</span> ${l.text}</p>`).join("")}
+        </div>` : ""}`) +
       `</div>`
         : "";
 }
@@ -728,18 +742,65 @@ const monthlyPayload = () => {
     document.querySelectorAll("[data-payment]").forEach((el) => {
         if (el.value !== "") payments[el.dataset.payment] = toNum(el.value);
     });
-    return { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses, transfersDone: window._transfersDone || {} };
+    return {
+        month: selectedMonth,
+        balances,
+        payments,
+        expenses: window._monthlyExpenses,
+        transfersDone: window._transfersDone || {},
+        transferLog: window._transferLog || [],
+        plan: (window._planCtx?.items || []).map((t) => ({
+            kind: t.kind,
+            key: t.key,
+            from: bankName(t.fromId),
+            to: t.kind === "expense" ? t.name : bankName(t.toId),
+            amount: t.amount,
+            fixed: !!t.fixed,
+            back: !!t.back,
+        })),
+    };
 };
 
 let autosaveTimer = null;
 
-function toggleTransferDone(key, checked) {
-    window._transfersDone = window._transfersDone || {};
-    if (checked) window._transfersDone[key] = true;
-    else delete window._transfersDone[key];
-    renderSummary();
+const scheduleAutosave = () => {
     clearTimeout(autosaveTimer);
     autosaveTimer = setTimeout(() => api("POST", "/api/monthly", monthlyPayload()).catch(() => {}), 400);
+};
+
+function toggleTransferDone(key, checked) {
+    window._transfersDone = window._transfersDone || {};
+    window._transferLog = window._transferLog || [];
+    const ctx = window._planCtx;
+    const item = ctx?.items.find((t) => t.key === key);
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const at = `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    if (checked) {
+        const snap = { at };
+        window._transfersDone[key] = snap;
+        if (item && ctx) {
+            snap.fromBal = ctx.holdingOf(item.fromId);
+            if (item.kind === "expense") {
+                window._transferLog.push({ at, text: `${bankName(item.fromId)} → ${item.name} ${won(item.amount)} 지출 완료 (${bankName(item.fromId)} 잔액 ${won(snap.fromBal)})` });
+            } else {
+                snap.toBal = ctx.holdingOf(item.toId);
+                window._transferLog.push({ at, text: `${bankName(item.fromId)} → ${bankName(item.toId)} ${won(item.amount)} 이체 완료 (${bankName(item.fromId)} 잔액 ${won(snap.fromBal)} · ${bankName(item.toId)} 잔액 ${won(snap.toBal)})` });
+            }
+        }
+    } else {
+        delete window._transfersDone[key];
+        if (item) window._transferLog.push({ at, text: `${bankName(item.fromId)} → ${item.kind === "expense" ? item.name : bankName(item.toId)} ${won(item.amount)} 체크 해제`, undo: true });
+    }
+    renderSummary();
+    scheduleAutosave();
+}
+
+async function clearTransferLog() {
+    if (!(await confirmDelete("이체 로그를 모두 지웁니다."))) return;
+    window._transferLog = [];
+    renderSummary();
+    scheduleAutosave();
 }
 
 async function saveMonthly() {
@@ -830,7 +891,16 @@ async function renderHistory() {
                 ${histItem("카드 결제", pay, "text-red-500")}
                 ${histItem("카드 외 지출", exp, "text-orange-500")}
                 ${histItem("예상 잔액", remain, remain >= 0 ? "text-green-600" : "text-red-600")}
-            </div>`);
+            </div>
+            ${r.plan?.length ? `
+            <div class="mt-3 pt-3 border-t border-slate-100">
+                <p class="text-xs font-bold text-slate-500 mb-1">이체 플랜 (${r.plan.filter((p) => r.transfersDone?.[p.key]).length}/${r.plan.length} 완료)</p>
+                ${r.plan
+                    .map(
+                        (p) => `<p class="text-xs text-slate-600 py-0.5">${r.transfersDone?.[p.key] ? "✅" : "⬜"} ${p.from} → ${p.to} <b class="tabular-nums">${won(p.amount)}</b>${p.fixed ? ' <span class="text-amber-600">고정</span>' : ""}${p.back ? ' <span class="text-emerald-600">반환</span>' : ""}${p.kind === "expense" ? ' <span class="text-orange-500">지출</span>' : ""}</p>`
+                    )
+                    .join("")}
+            </div>` : ""}`);
               })
               .join("")
         : emptyState("저장된 결제 이력이 없습니다. '이번달 결제'에서 입력 후 저장하세요.");
