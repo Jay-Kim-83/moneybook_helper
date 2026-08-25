@@ -5,6 +5,7 @@ data/
 .history/
 .vscode/
 *.log
+작업기록.md
 *.code-workspace
 .DS_Store
 Thumbs.db

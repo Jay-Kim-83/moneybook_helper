@@ -16,7 +16,7 @@ const DATABASE_URL = process.env.DATABASE_URL || "";
 const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [] };
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
-    banks: ["name", "alias", "accountLast4"],
+    banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
     cards: ["company", "alias", "cardLast4", "bankId"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
 };
@@ -166,7 +166,16 @@ const readBody = (req) =>
 
 const normalize = (collection, body) => {
     const data = FIELDS[collection].reduce((o, k) => (k in body ? { ...o, [k]: body[k] } : o), {});
-    if (collection === "banks" && data.accountLast4 != null) data.accountLast4 = String(data.accountLast4).replace(/\D/g, "").slice(-4);
+    if (collection === "banks") {
+        if (data.accountLast4 != null) data.accountLast4 = String(data.accountLast4).replace(/\D/g, "").slice(-4);
+        if ("relayExclude" in data) data.relayExclude = !!data.relayExclude;
+        if ("relayTarget" in data) data.relayTarget = String(data.relayTarget || "");
+        if ("retainAmount" in data) data.retainAmount = Number(data.retainAmount) || 0;
+        if ("fixedTransfers" in data)
+            data.fixedTransfers = (Array.isArray(data.fixedTransfers) ? data.fixedTransfers : [])
+                .map((t) => ({ bankId: String(t?.bankId || ""), amount: Number(t?.amount) || 0 }))
+                .filter((t) => t.bankId && t.amount > 0);
+    }
     if (collection === "cards" && data.cardLast4 != null) data.cardLast4 = String(data.cardLast4).replace(/\D/g, "").slice(-4);
     if (collection === "fixedExpenses" && data.amount != null) data.amount = Number(data.amount) || 0;
     return data;
@@ -281,6 +290,18 @@ const handleApi = async (req, res, parts) => {
             await store.deleteMonthly(id);
             return send(res, 200, { ok: true });
         }
+    }
+
+    if (collection === "banks" && id === "reorder" && method === "POST") {
+        const { ids } = await readBody(req);
+        if (!Array.isArray(ids)) return send(res, 400, { error: "잘못된 순서 데이터" });
+        const db = await store.readDB();
+        db.banks = [
+            ...ids.map((i) => db.banks.find((b) => b.id === i)).filter(Boolean),
+            ...db.banks.filter((b) => !ids.includes(b.id)),
+        ];
+        await store.writeDB(db);
+        return send(res, 200, { ok: true });
     }
 
     if (COLLECTIONS.includes(collection)) {

@@ -115,26 +115,139 @@ const reload = async () => {
     renderAll();
 };
 
+const relayChain = () => DB.banks.filter((b) => !b.relayExclude);
+
+const relayBadges = (b) => {
+    const tag = (text, cls) => `<span class="inline-block text-xs px-2 py-0.5 rounded ${cls}">${text}</span>`;
+    if (b.relayExclude) return tag("🚫 릴레이 제외", "bg-slate-100 text-slate-500");
+    const chain = relayChain();
+    const next = chain[chain.findIndex((x) => x.id === b.id) + 1];
+    const target =
+        b.relayTarget === "none" ? "보유 (이체 안 함)" : b.relayTarget ? `${bankName(b.relayTarget)} 이체` : next ? `${next.name} 이체 (자동)` : "보유 (마지막)";
+    const badges = [tag(`➡ ${target}`, "bg-indigo-50 text-indigo-700")];
+    if (Number(b.retainAmount)) badges.push(tag(`남김 ${won(b.retainAmount)}`, "bg-emerald-50 text-emerald-700"));
+    if (b.fixedTransfers?.length) badges.push(tag(`고정: ${b.fixedTransfers.map((t) => `${bankName(t.bankId)} ${won(t.amount)}`).join(" · ")}`, "bg-amber-50 text-amber-700"));
+    return badges.join(" ");
+};
+
 function renderBanks() {
+    const chain = relayChain();
     const list = DB.banks.length
         ? DB.banks
-              .map(
-                  (b) => card(`
+              .map((b, i) => {
+                  const order = chain.findIndex((x) => x.id === b.id);
+                  return `<div draggable="true" data-bank-id="${b.id}" ondragstart="onBankDragStart('${b.id}')" ondragover="event.preventDefault()" ondrop="onBankDrop(event, '${b.id}')">
+            ${card(`
             <div class="flex items-start justify-between">
-                <div>
-                    <p class="font-bold text-slate-800">${b.name}${b.alias ? ` <span class="text-sm font-normal text-slate-400">(${b.alias})</span>` : ""}</p>
-                    <p class="text-sm text-slate-500 mt-1">계좌 끝 4자리: ${last4(b.accountLast4)}</p>
+                <div class="flex items-start gap-2">
+                    <span class="cursor-move text-slate-300 select-none pt-0.5" title="드래그해서 순서 변경">⠿</span>
+                    <div>
+                        <p class="font-bold text-slate-800">
+                            ${order >= 0 ? `<span class="inline-flex items-center justify-center w-5 h-5 mr-1 rounded-full bg-indigo-600 text-white text-xs">${order + 1}</span>` : ""}
+                            ${b.name}${b.alias ? ` <span class="text-sm font-normal text-slate-400">(${b.alias})</span>` : ""}
+                        </p>
+                        <p class="text-sm text-slate-500 mt-1">계좌 끝 4자리: ${last4(b.accountLast4)}</p>
+                        <div class="mt-2 flex flex-wrap gap-1">${relayBadges(b)}</div>
+                    </div>
                 </div>
-                <div class="flex gap-2 shrink-0">
+                <div class="flex items-center gap-2 shrink-0">
+                    <button onclick="moveBank('${b.id}', -1)" class="text-slate-400 hover:text-indigo-600 text-sm ${i === 0 ? "invisible" : ""}">▲</button>
+                    <button onclick="moveBank('${b.id}', 1)" class="text-slate-400 hover:text-indigo-600 text-sm ${i === DB.banks.length - 1 ? "invisible" : ""}">▼</button>
+                    <button onclick="relaySettings('${b.id}')" class="text-emerald-600 hover:underline text-sm">이체 설정</button>
                     <button onclick="editBank('${b.id}')" class="text-indigo-600 hover:underline text-sm">수정</button>
                     <button onclick="deleteBank('${b.id}')" class="text-red-600 hover:underline text-sm">삭제</button>
                 </div>
-            </div>`)
-              )
+            </div>`)}
+        </div>`;
+              })
               .join("")
         : emptyState("등록된 은행이 없습니다. 은행을 추가해 주세요.");
     document.getElementById("tab-banks").innerHTML =
-        sectionHeader("나의 은행", "+ 은행 추가", "saveBank()") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
+        sectionHeader("나의 은행", "+ 은행 추가", "saveBank()") +
+        `<p class="text-xs text-slate-400 -mt-2 mb-3">카드를 드래그하거나 ▲▼로 순서를 바꾸면 이체 릴레이·이번달 결제 순서가 함께 바뀝니다.</p>
+        <div class="grid gap-3 md:grid-cols-2">${list}</div>`;
+}
+
+let dragBankId = null;
+
+const onBankDragStart = (id) => (dragBankId = id);
+
+async function persistBankOrder(ids) {
+    await api("POST", "/api/banks/reorder", { ids });
+    await reload();
+}
+
+async function onBankDrop(e, targetId) {
+    e.preventDefault();
+    if (!dragBankId || dragBankId === targetId) return;
+    const ids = DB.banks.map((b) => b.id);
+    ids.splice(ids.indexOf(targetId), 0, ids.splice(ids.indexOf(dragBankId), 1)[0]);
+    dragBankId = null;
+    await persistBankOrder(ids);
+}
+
+async function moveBank(id, dir) {
+    const ids = DB.banks.map((b) => b.id);
+    const i = ids.indexOf(id), j = i + dir;
+    if (j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    await persistBankOrder(ids);
+}
+
+const fixedRowHtml = (bankId, t = {}) => {
+    const opts = DB.banks
+        .filter((x) => x.id !== bankId)
+        .map((x) => `<option value="${x.id}" ${x.id === t.bankId ? "selected" : ""}>${x.name}</option>`)
+        .join("");
+    return `<div class="ftRow flex items-center gap-2 mt-2">
+        <select class="ftBank swal2-input !m-0 !flex !flex-1">${opts}</select>
+        <input class="ftAmount swal2-input !m-0 !w-32 text-right" type="text" inputmode="numeric" value="${comma(t.amount ?? "")}" placeholder="금액" oninput="formatMoneyInput(this)" />
+        <button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1">✕</button>
+    </div>`;
+};
+
+const addFixedRow = (bankId) => document.getElementById("ftList").insertAdjacentHTML("beforeend", fixedRowHtml(bankId));
+
+async function relaySettings(id) {
+    const b = DB.banks.find((x) => x.id === id);
+    const targetOpts = [
+        { value: "", label: "자동 (다음 순서 은행)" },
+        { value: "none", label: "보유 (이체 안 함 — 최종 도착지)" },
+        ...DB.banks.filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name })),
+    ]
+        .map((o) => `<option value="${o.value}" ${o.value === (b.relayTarget || "") ? "selected" : ""}>${o.label}</option>`)
+        .join("");
+    const { value: v } = await Swal.fire({
+        title: `${b.name} 이체 설정`,
+        html: `<div class="text-left text-sm">
+            <label class="flex items-center gap-2 mt-1 cursor-pointer"><input id="r_exclude" type="checkbox" ${b.relayExclude ? "checked" : ""} class="w-4 h-4 accent-indigo-600" /> 이체 릴레이에서 제외</label>
+            <label class="block font-medium text-slate-600 mt-4 mb-1">남는 돈 이체 대상</label>
+            <select id="r_target" class="swal2-input !m-0 !w-full !flex">${targetOpts}</select>
+            <label class="block font-medium text-slate-600 mt-3 mb-1">남길 금액 <span class="text-xs font-normal text-slate-400">(카드값·카드외지출 외에 추가로 남길 돈)</span></label>
+            <input id="r_retain" type="text" inputmode="numeric" value="${comma(b.retainAmount || "")}" placeholder="0" oninput="formatMoneyInput(this)" class="swal2-input !m-0 !w-full text-right" />
+            <div class="flex items-center justify-between mt-4 mb-1">
+                <span class="font-medium text-slate-600">고정 이체 <span class="text-xs font-normal text-slate-400">(남는 돈과 별개로 무조건 송금)</span></span>
+                <button type="button" onclick="addFixedRow('${b.id}')" class="text-indigo-600 text-xs hover:underline">+ 추가</button>
+            </div>
+            <div id="ftList">${(b.fixedTransfers || []).map((t) => fixedRowHtml(b.id, t)).join("")}</div>
+        </div>`,
+        showCancelButton: true,
+        confirmButtonText: "저장",
+        cancelButtonText: "취소",
+        confirmButtonColor: "#4f46e5",
+        preConfirm: () => ({
+            relayExclude: document.getElementById("r_exclude").checked,
+            relayTarget: document.getElementById("r_target").value,
+            retainAmount: toNum(document.getElementById("r_retain").value),
+            fixedTransfers: [...document.querySelectorAll("#ftList .ftRow")]
+                .map((r) => ({ bankId: r.querySelector(".ftBank").value, amount: toNum(r.querySelector(".ftAmount").value) }))
+                .filter((t) => t.bankId && t.amount > 0),
+        }),
+    });
+    if (!v) return;
+    await api("PUT", `/api/banks/${id}`, v);
+    await reload();
+    toast("success", "이체 설정이 저장되었습니다");
 }
 
 const bankFields = () => [
@@ -328,6 +441,7 @@ async function renderMonthly() {
     window._monthlyExpenses = current.expenses?.length
         ? current.expenses
         : DB.fixedExpenses.map((e) => ({ name: e.name, amount: e.amount, bankId: e.bankId }));
+    window._transfersDone = current.transfersDone || {};
 
     const balanceRows = DB.banks.length
         ? DB.banks
@@ -464,28 +578,53 @@ function renderSummary() {
     );
     const expenseByBank = sumByBank(window._monthlyExpenses, (e) => e.bankId, (e) => toNum(e.amount));
 
+    const plan = computeRelayPlan(balanceOf, paymentByBank, expenseByBank);
+    const done = window._transfersDone || {};
+
     const remainClass = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
     const num = (v, cls = "text-slate-700") => `<td class="text-right py-2 px-2 tabular-nums ${cls}">${won(v)}</td>`;
-    const totals = { bal: 0, pay: 0, exp: 0 };
+    const totals = { bal: 0, pay: 0, exp: 0, inf: 0, remain: 0 };
     const rows = DB.banks
         .map((b) => {
             const bal = balanceOf(b.id), pay = paymentByBank[b.id] || 0, exp = expenseByBank[b.id] || 0;
-            const remain = bal - pay - exp;
+            const inf = plan.inflow[b.id] || 0, out = plan.outflow[b.id] || 0;
+            const remain = bal + inf - pay - exp - out;
             totals.bal += bal;
             totals.pay += pay;
             totals.exp += exp;
-            return `<tr class="border-b border-slate-100">
-                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
+            totals.inf += inf;
+            totals.remain += remain;
+            return `<tr class="border-b border-slate-100 ${b.relayExclude ? "opacity-50" : ""}">
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}${b.relayExclude ? ' <span class="text-xs text-slate-400">(제외)</span>' : ""}</td>
                 ${num(bal)}${num(pay, "text-red-500")}${num(exp, "text-orange-500")}
+                ${b.relayExclude ? '<td class="text-right py-2 px-2 text-slate-300">—</td>' : num(inf, inf ? "text-sky-600" : "text-slate-300")}
                 ${num(remain, `font-bold ${remainClass(remain)}`)}
             </tr>`;
         })
         .join("");
-    const totalRemain = totals.bal - totals.pay - totals.exp;
+
+    const doneCount = plan.transfers.filter((t) => done[t.key]).length;
+    const planRows = plan.transfers
+        .map((t, i) => {
+            const checked = !!done[t.key];
+            const tag = (text, cls) => `<span class="text-xs px-1.5 py-0.5 rounded ${cls}">${text}</span>`;
+            return `<label class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer ${checked ? "opacity-50" : ""}">
+                <input type="checkbox" ${checked ? "checked" : ""} onchange="toggleTransferDone('${t.key}', this.checked)" class="w-4 h-4 accent-indigo-600 shrink-0" />
+                <span class="text-xs text-slate-400 w-4 text-right">${i + 1}</span>
+                <span class="flex-1 text-slate-700 ${checked ? "line-through" : ""}">
+                    ${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
+                    ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
+                    ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
+                    ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}
+                </span>
+                <span class="font-bold tabular-nums ${checked ? "text-slate-400" : "text-indigo-600"}">${won(t.amount)}</span>
+            </label>`;
+        })
+        .join("");
 
     document.getElementById("monthlySummary").innerHTML = DB.banks.length
         ? card(`
-        <h3 class="font-bold text-slate-700 mb-3">④ 은행별 남는 금액 <span class="text-xs font-normal text-slate-400">(잔액 − 카드결제 − 카드외지출)</span></h3>
+        <h3 class="font-bold text-slate-700 mb-3">④ 은행별 정산 <span class="text-xs font-normal text-slate-400">(잔액 + 받을 이체 − 카드결제 − 카드외지출 − 보낼 이체)</span></h3>
         <div class="overflow-x-auto">
             <table class="w-full text-sm">
                 <thead>
@@ -494,6 +633,7 @@ function renderSummary() {
                         <th class="text-right py-2 px-2">잔액</th>
                         <th class="text-right py-2 px-2">카드 결제</th>
                         <th class="text-right py-2 px-2">카드 외</th>
+                        <th class="text-right py-2 px-2">받을 이체</th>
                         <th class="text-right py-2 px-2">남는 금액</th>
                     </tr>
                 </thead>
@@ -502,12 +642,50 @@ function renderSummary() {
                     <tr class="border-t-2 border-slate-300 bg-slate-50">
                         <td class="py-2.5 px-2 font-bold text-slate-800">합계</td>
                         ${num(totals.bal, "font-bold text-slate-800")}${num(totals.pay, "font-bold text-red-500")}${num(totals.exp, "font-bold text-orange-500")}
-                        ${num(totalRemain, `text-base font-bold ${remainClass(totalRemain)}`)}
+                        ${num(totals.inf, "font-bold text-sky-600")}
+                        ${num(totals.remain, `text-base font-bold ${remainClass(totals.remain)}`)}
                     </tr>
                 </tfoot>
             </table>
-        </div>`)
+        </div>`) +
+      `<div class="mt-4">` +
+          card(`
+        <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
+            <h3 class="font-bold text-slate-700">⑤ 이체 플랜 <span class="text-xs font-normal text-slate-400">(위에서부터 순서대로 이체하고 체크)</span></h3>
+            ${plan.transfers.length ? `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${doneCount === plan.transfers.length ? "bg-green-100 text-green-700" : "bg-indigo-50 text-indigo-700"}">${doneCount}/${plan.transfers.length} 완료</span>` : ""}
+        </div>
+        ${plan.transfers.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}`) +
+      `</div>`
         : "";
+}
+
+function computeRelayPlan(balanceOf, paymentByBank, expenseByBank) {
+    const chain = relayChain();
+    const inflow = {}, outflow = {}, transfers = [];
+    chain.forEach((b, i) => {
+        let avail = balanceOf(b.id) + (inflow[b.id] || 0) - (paymentByBank[b.id] || 0) - (expenseByBank[b.id] || 0);
+        for (const t of b.fixedTransfers || []) {
+            transfers.push({ key: `${b.id}>${t.bankId}:f`, fromId: b.id, toId: t.bankId, amount: t.amount, fixed: true, short: avail < t.amount });
+            inflow[t.bankId] = (inflow[t.bankId] || 0) + t.amount;
+            outflow[b.id] = (outflow[b.id] || 0) + t.amount;
+            avail -= t.amount;
+        }
+        const targetId = b.relayTarget === "none" ? null : b.relayTarget || chain[i + 1]?.id;
+        const amount = avail - (Number(b.retainAmount) || 0);
+        if (targetId && amount > 0) {
+            transfers.push({ key: `${b.id}>${targetId}:a`, fromId: b.id, toId: targetId, amount, back: chain.findIndex((x) => x.id === targetId) < i });
+            inflow[targetId] = (inflow[targetId] || 0) + amount;
+            outflow[b.id] = (outflow[b.id] || 0) + amount;
+        }
+    });
+    return { transfers, inflow, outflow };
+}
+
+function toggleTransferDone(key, checked) {
+    window._transfersDone = window._transfersDone || {};
+    if (checked) window._transfersDone[key] = true;
+    else delete window._transfersDone[key];
+    renderSummary();
 }
 
 async function saveMonthly() {
@@ -519,7 +697,7 @@ async function saveMonthly() {
     document.querySelectorAll("[data-payment]").forEach((el) => {
         if (el.value !== "") payments[el.dataset.payment] = toNum(el.value);
     });
-    await api("POST", "/api/monthly", { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses });
+    await api("POST", "/api/monthly", { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses, transfersDone: window._transfersDone || {} });
     await reload();
     toast("success", `${selectedMonth} 결제 내역이 저장되었습니다`);
 }
