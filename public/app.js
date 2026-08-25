@@ -624,28 +624,35 @@ function renderSummary() {
         })
         .join("");
 
-    const doneCount = plan.transfers.filter((t) => done[t.key]).length;
+    const doneCount = plan.items.filter((t) => done[t.key]).length;
     const holdingOf = (bankId) =>
-        balanceOf(bankId) +
-        plan.transfers.filter((t) => done[t.key] && t.toId === bankId).reduce((s, t) => s + t.amount, 0) -
-        plan.transfers.filter((t) => done[t.key] && t.fromId === bankId).reduce((s, t) => s + t.amount, 0);
-    const planRows = plan.transfers
+        plan.items.reduce((s, t) => {
+            if (!done[t.key]) return s;
+            if (t.kind === "expense") return t.fromId === bankId ? s - t.amount : s;
+            return s + (t.toId === bankId ? t.amount : 0) - (t.fromId === bankId ? t.amount : 0);
+        }, balanceOf(bankId));
+    const planRows = plan.items
         .map((t, i) => {
             const checked = !!done[t.key];
             const tag = (text, cls) => `<span class="text-xs px-1.5 py-0.5 rounded ${cls}">${text}</span>`;
+            const isExp = t.kind === "expense";
+            const title = isExp
+                ? `${bankName(t.fromId)} <span class="text-slate-400">→</span> ${t.name} ${tag("지출", "bg-orange-50 text-orange-600")}`
+                : `${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
+                    ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
+                    ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
+                    ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}`;
+            const log = isExp
+                ? `✓ 지출 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))}`
+                : `✓ 이체 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))} <span class="text-slate-300">|</span> ${bankName(t.toId)} 잔액 ${won(holdingOf(t.toId))}`;
             return `<label class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer">
                 <input type="checkbox" ${checked ? "checked" : ""} onchange="toggleTransferDone('${t.key}', this.checked)" class="w-4 h-4 accent-indigo-600 shrink-0" />
                 <span class="text-xs text-slate-400 w-4 text-right">${i + 1}</span>
                 <span class="flex-1">
-                    <span class="text-slate-700 ${checked ? "line-through opacity-50" : ""}">
-                        ${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
-                        ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
-                        ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
-                        ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}
-                    </span>
-                    ${checked ? `<span class="block text-xs text-sky-600 mt-0.5">✓ 이체 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))} <span class="text-slate-300">|</span> ${bankName(t.toId)} 잔액 ${won(holdingOf(t.toId))}</span>` : ""}
+                    <span class="text-slate-700 ${checked ? "line-through opacity-50" : ""}">${title}</span>
+                    ${checked ? `<span class="block text-xs text-sky-600 mt-0.5">${log}</span>` : ""}
                 </span>
-                <span class="font-bold tabular-nums ${checked ? "text-slate-400 line-through" : "text-indigo-600"}">${won(t.amount)}</span>
+                <span class="font-bold tabular-nums ${checked ? "text-slate-400 line-through" : isExp ? "text-orange-500" : "text-indigo-600"}">${won(t.amount)}</span>
             </label>`;
         })
         .join("");
@@ -680,20 +687,23 @@ function renderSummary() {
           card(`
         <div class="flex items-center justify-between mb-2 gap-2 flex-wrap">
             <h3 class="font-bold text-slate-700">⑤ 이체 플랜 <span class="text-xs font-normal text-slate-400">(위에서부터 순서대로 이체하고 체크)</span></h3>
-            ${plan.transfers.length ? `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${doneCount === plan.transfers.length ? "bg-green-100 text-green-700" : "bg-indigo-50 text-indigo-700"}">${doneCount}/${plan.transfers.length} 완료</span>` : ""}
+            ${plan.items.length ? `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${doneCount === plan.items.length ? "bg-green-100 text-green-700" : "bg-indigo-50 text-indigo-700"}">${doneCount}/${plan.items.length} 완료</span>` : ""}
         </div>
-        ${plan.transfers.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}`) +
+        ${plan.items.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}`) +
       `</div>`
         : "";
 }
 
 function computeRelayPlan(balanceOf, paymentByBank, expenseByBank) {
     const chain = relayChain();
-    const inflow = {}, outflow = {}, transfers = [];
+    const inflow = {}, outflow = {}, items = [];
     chain.forEach((b, i) => {
+        (window._monthlyExpenses || []).forEach((e, idx) => {
+            if (e.bankId === b.id && toNum(e.amount)) items.push({ kind: "expense", key: `x:${idx}:${b.id}`, fromId: b.id, name: e.name, amount: toNum(e.amount) });
+        });
         let avail = balanceOf(b.id) + (inflow[b.id] || 0) - (paymentByBank[b.id] || 0) - (expenseByBank[b.id] || 0);
         for (const t of b.fixedTransfers || []) {
-            transfers.push({ key: `${b.id}>${t.bankId}:f`, fromId: b.id, toId: t.bankId, amount: t.amount, fixed: true, short: avail < t.amount });
+            items.push({ kind: "transfer", key: `${b.id}>${t.bankId}:f`, fromId: b.id, toId: t.bankId, amount: t.amount, fixed: true, short: avail < t.amount });
             inflow[t.bankId] = (inflow[t.bankId] || 0) + t.amount;
             outflow[b.id] = (outflow[b.id] || 0) + t.amount;
             avail -= t.amount;
@@ -701,22 +711,15 @@ function computeRelayPlan(balanceOf, paymentByBank, expenseByBank) {
         const targetId = b.relayTarget === "none" ? null : b.relayTarget || chain[i + 1]?.id;
         const amount = avail - (Number(b.retainAmount) || 0);
         if (targetId && amount > 0) {
-            transfers.push({ key: `${b.id}>${targetId}:a`, fromId: b.id, toId: targetId, amount, back: chain.findIndex((x) => x.id === targetId) < i });
+            items.push({ kind: "transfer", key: `${b.id}>${targetId}:a`, fromId: b.id, toId: targetId, amount, back: chain.findIndex((x) => x.id === targetId) < i });
             inflow[targetId] = (inflow[targetId] || 0) + amount;
             outflow[b.id] = (outflow[b.id] || 0) + amount;
         }
     });
-    return { transfers, inflow, outflow };
+    return { items, inflow, outflow };
 }
 
-function toggleTransferDone(key, checked) {
-    window._transfersDone = window._transfersDone || {};
-    if (checked) window._transfersDone[key] = true;
-    else delete window._transfersDone[key];
-    renderSummary();
-}
-
-async function saveMonthly() {
+const monthlyPayload = () => {
     const balances = {};
     document.querySelectorAll("[data-balance]").forEach((el) => {
         if (el.value !== "") balances[el.dataset.balance] = toNum(el.value);
@@ -725,7 +728,22 @@ async function saveMonthly() {
     document.querySelectorAll("[data-payment]").forEach((el) => {
         if (el.value !== "") payments[el.dataset.payment] = toNum(el.value);
     });
-    await api("POST", "/api/monthly", { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses, transfersDone: window._transfersDone || {} });
+    return { month: selectedMonth, balances, payments, expenses: window._monthlyExpenses, transfersDone: window._transfersDone || {} };
+};
+
+let autosaveTimer = null;
+
+function toggleTransferDone(key, checked) {
+    window._transfersDone = window._transfersDone || {};
+    if (checked) window._transfersDone[key] = true;
+    else delete window._transfersDone[key];
+    renderSummary();
+    clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => api("POST", "/api/monthly", monthlyPayload()).catch(() => {}), 400);
+}
+
+async function saveMonthly() {
+    await api("POST", "/api/monthly", monthlyPayload());
     await reload();
     toast("success", `${selectedMonth} 결제 내역이 저장되었습니다`);
 }
