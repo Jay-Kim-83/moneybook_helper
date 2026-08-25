@@ -643,7 +643,7 @@ function renderSummary() {
                         ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
                         ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}
                     </span>
-                    ${checked ? `<span class="block text-xs text-sky-600 mt-0.5">✓ 이체 완료 — ${bankName(t.toId)} 현재 잔액 ${won(holdingOf(t.toId))}</span>` : ""}
+                    ${checked ? `<span class="block text-xs text-sky-600 mt-0.5">✓ 이체 완료 — ${bankName(t.fromId)} 잔액 ${won(holdingOf(t.fromId))} <span class="text-slate-300">|</span> ${bankName(t.toId)} 잔액 ${won(holdingOf(t.toId))}</span>` : ""}
                 </span>
                 <span class="font-bold tabular-nums ${checked ? "text-slate-400 line-through" : "text-indigo-600"}">${won(t.amount)}</span>
             </label>`;
