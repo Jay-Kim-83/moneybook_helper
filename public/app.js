@@ -604,20 +604,27 @@ function renderSummary() {
         .join("");
 
     const doneCount = plan.transfers.filter((t) => done[t.key]).length;
+    const holdingOf = (bankId) =>
+        balanceOf(bankId) +
+        plan.transfers.filter((t) => done[t.key] && t.toId === bankId).reduce((s, t) => s + t.amount, 0) -
+        plan.transfers.filter((t) => done[t.key] && t.fromId === bankId).reduce((s, t) => s + t.amount, 0);
     const planRows = plan.transfers
         .map((t, i) => {
             const checked = !!done[t.key];
             const tag = (text, cls) => `<span class="text-xs px-1.5 py-0.5 rounded ${cls}">${text}</span>`;
-            return `<label class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer ${checked ? "opacity-50" : ""}">
+            return `<label class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer">
                 <input type="checkbox" ${checked ? "checked" : ""} onchange="toggleTransferDone('${t.key}', this.checked)" class="w-4 h-4 accent-indigo-600 shrink-0" />
                 <span class="text-xs text-slate-400 w-4 text-right">${i + 1}</span>
-                <span class="flex-1 text-slate-700 ${checked ? "line-through" : ""}">
-                    ${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
-                    ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
-                    ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
-                    ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}
+                <span class="flex-1">
+                    <span class="text-slate-700 ${checked ? "line-through opacity-50" : ""}">
+                        ${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
+                        ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
+                        ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
+                        ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}
+                    </span>
+                    ${checked ? `<span class="block text-xs text-sky-600 mt-0.5">✓ 이체 완료 — ${bankName(t.toId)} 현재 잔액 ${won(holdingOf(t.toId))}</span>` : ""}
                 </span>
-                <span class="font-bold tabular-nums ${checked ? "text-slate-400" : "text-indigo-600"}">${won(t.amount)}</span>
+                <span class="font-bold tabular-nums ${checked ? "text-slate-400 line-through" : "text-indigo-600"}">${won(t.amount)}</span>
             </label>`;
         })
         .join("");
