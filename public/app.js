@@ -455,27 +455,39 @@ function drawLedger() {
     const cb = DB.currentBalances || {};
 
     const rec = window._ledgerRec || {};
-    const needBy = {};
+    const dueBy = {};
     Object.entries(rec.payments || {}).forEach(([cardId, v]) => {
         const bid = DB.cards.find((c) => c.id === cardId)?.bankId;
-        if (bid) needBy[bid] = (needBy[bid] || 0) + (Number(v) || 0);
+        if (bid && Number(v)) (dueBy[bid] = dueBy[bid] || []).push(Number(v));
     });
     (rec.expenses || []).forEach((e) => {
-        if (e.bankId) needBy[e.bankId] = (needBy[e.bankId] || 0) + (Number(e.amount) || 0);
+        if (e.bankId && Number(e.amount)) (dueBy[e.bankId] = dueBy[e.bankId] || []).push(Number(e.amount));
     });
 
     let total = 0, totalNeed = 0;
     const balRows = DB.banks
         .map((b) => {
             const c = cb[b.id];
-            const need = needBy[b.id] || 0;
+            const due = dueBy[b.id] || [];
+            const pool = txs.filter((t) => t.bankId === b.id && t.kind === "출금" && t.amount > 0).map((t) => t.amount);
+            let paid = 0;
+            const unpaid = due.filter((a) => {
+                const i = pool.indexOf(a);
+                if (i >= 0) {
+                    pool.splice(i, 1);
+                    paid += a;
+                    return false;
+                }
+                return true;
+            });
+            const need = unpaid.reduce((s, a) => s + a, 0);
             if (c) total += c.amount;
             totalNeed += need;
             const free = c && need ? c.amount - need : null;
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "—"}</td>
-                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}</td>
+                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
                 <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? "📩 " + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
@@ -534,7 +546,7 @@ function drawLedger() {
         </div>
         <div class="grid gap-4">
             ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = ${ledgerMonth} 결제의 카드값+카드외지출 — 아직 빠져나갈 돈)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = ${ledgerMonth} 카드값+카드외지출 중 아직 안 빠져나간 돈 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
