@@ -480,7 +480,7 @@ function drawLedger() {
                 }
                 return true;
             });
-            const need = unpaid.reduce((s, a) => s + a, 0);
+            const need = unpaid.reduce((s, a) => s + a, 0) + (Number(b.retainAmount) || 0);
             if (c) total += c.amount;
             totalNeed += need;
             const free = c && need ? c.amount - need : null;
@@ -546,7 +546,7 @@ function drawLedger() {
         </div>
         <div class="grid gap-4">
             ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = ${ledgerMonth} 카드값+카드외지출 중 아직 안 빠져나간 돈 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 안 빠져나간 ${ledgerMonth} 카드값+카드외지출 + 이체 설정의 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
