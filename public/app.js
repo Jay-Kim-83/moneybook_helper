@@ -563,6 +563,7 @@ async function showTxRaw(i) {
         showDenyButton: true,
         denyButtonText: "삭제",
         denyButtonColor: "#dc2626",
+        reverseButtons: true,
     });
     if (isDenied && (await confirmDelete("이 거래를 삭제합니다."))) {
         await api("DELETE", `/api/transactions/${t.id}`);
@@ -651,7 +652,8 @@ async function renderMonthly() {
 }
 
 const diffText = (cur, prev) => {
-    if (prev === undefined || prev === null || prev === "" || cur === "" || cur === undefined) return "전월 기록 없음";
+    if (prev === undefined || prev === null || prev === "") return "전월 기록 없음";
+    if (cur === "" || cur === undefined) return `전월 ${won(prev)}`;
     const d = toNum(cur) - Number(prev);
     if (d === 0) return `전월과 동일 (${won(prev)})`;
     return d > 0 ? `▲ 전월 대비 ${won(d)} 더 지출` : `▼ 전월 대비 ${won(-d)} 절약`;
