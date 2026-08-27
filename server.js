@@ -316,11 +316,11 @@ const parseSms = (sender, text, db) => {
     }
     if (title.includes(">")) kind = "이체";
 
-    const now = new Date();
+    const now = new Date(Date.now() + 9 * 3600 * 1000);
     const dm = t.match(/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2})/);
     const at = dm
-        ? `${now.getFullYear()}-${dm[1]}-${dm[2]} ${dm[3]}:${dm[4]}`
-        : `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+        ? `${now.getUTCFullYear()}-${dm[1]}-${dm[2]} ${dm[3]}:${dm[4]}`
+        : `${now.getUTCFullYear()}-${pad2(now.getUTCMonth() + 1)}-${pad2(now.getUTCDate())} ${pad2(now.getUTCHours())}:${pad2(now.getUTCMinutes())}`;
 
     let bankId = null;
     for (const acct of t.match(/[\d*][\d*\-]{5,}[\d*]/g) || []) {
