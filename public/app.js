@@ -446,13 +446,15 @@ async function renderMonthly() {
 
     const balanceRows = DB.banks.length
         ? DB.banks
-              .map(
-                  (b) => `<div class="flex items-center justify-between gap-3 py-2">
-            <span class="text-slate-700">🏦 ${b.name}</span>
-            <input data-balance="${b.id}" value="${comma(current.balances?.[b.id] ?? "")}" type="text" inputmode="numeric" placeholder="잔액" oninput="formatMoneyInput(this); renderSummary()"
+              .map((b) => {
+                  const saved = current.balances?.[b.id];
+                  const auto = saved == null ? DB.currentBalances?.[b.id] : null;
+                  return `<div class="flex items-center justify-between gap-3 py-2">
+            <span class="text-slate-700">🏦 ${b.name}${auto ? ` <span class="text-xs text-sky-500" title="문자 수집 잔액 (${auto.at})">📩 ${auto.at.slice(5)}</span>` : ""}</span>
+            <input data-balance="${b.id}" value="${comma(saved ?? auto?.amount ?? "")}" type="text" inputmode="numeric" placeholder="잔액" oninput="formatMoneyInput(this); renderSummary()"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
-        </div>`
-              )
+        </div>`;
+              })
               .join("")
         : emptyState("등록된 은행이 없습니다.");
 
