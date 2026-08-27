@@ -303,6 +303,7 @@ const parseSms = (sender, text, db) => {
     }
     if (amount === null && AD_RE.test(sender + " " + t)) return null;
     if (amount !== null && /취소/.test(t)) amount = -amount;
+    if (kind === "출금" && balance === null && /승인/.test(noBal)) kind = "카드";
 
     let title = "";
     const paren = t.match(/자동출금\s*[\d,]+\s*원\(([^)]+)\)/);
@@ -346,7 +347,11 @@ const parseSms = (sender, text, db) => {
         );
         if (hit) bankId = hit.id;
     }
-    const card = db.cards.find((c) => [c.company, c.alias].filter(Boolean).some((n) => (sender + " " + t).includes(n)));
+    const card = db.cards.find((c) =>
+        [c.company, c.alias]
+            .filter(Boolean)
+            .some((n) => (sender + " " + t).includes(n) || (kind === "카드" && n.length >= 2 && t.includes(n.slice(0, 2))))
+    );
 
     return {
         kind: amount === null ? "미분류" : kind,

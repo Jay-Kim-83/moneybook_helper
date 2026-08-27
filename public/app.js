@@ -449,16 +449,17 @@ async function renderLedger() {
     const sums = txs.reduce((a, t) => {
         if (t.kind === "입금") a.in += t.amount || 0;
         if (t.kind === "출금") a.out += t.amount || 0;
+        if (t.kind === "카드") a.card += t.amount || 0;
         return a;
-    }, { in: 0, out: 0 });
+    }, { in: 0, out: 0, card: 0 });
     const chip = (label, v, cls) => `<span class="text-xs px-2.5 py-1 rounded-full ${cls}">${label} ${won(v)}</span>`;
 
-    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 이체: "bg-slate-100 text-slate-500", 미분류: "bg-amber-50 text-amber-700" };
+    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 미분류: "bg-amber-50 text-amber-700" };
     const txRows = txs.length
         ? txs
               .map((t, i) => {
                   const srcs = [t.bankId ? bankName(t.bankId) : "", t.cardId ? DB.cards.find((c) => c.id === t.cardId)?.company || "" : ""].filter(Boolean).join(" · ");
-                  const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" ? "−" : "") + won(Math.abs(t.amount));
+                  const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
@@ -466,7 +467,7 @@ async function renderLedger() {
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                 </span>
-                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : "text-slate-400"}">${amt}</span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : "text-slate-400"}">${amt}</span>
             </div>`;
               })
               .join("")
@@ -498,6 +499,7 @@ async function renderLedger() {
                 <div class="flex gap-1.5 flex-wrap">
                     ${chip("입금 +", sums.in, "bg-green-50 text-green-700")}
                     ${chip("출금 −", sums.out, "bg-red-50 text-red-600")}
+                    ${chip("카드 −", sums.card, "bg-purple-50 text-purple-700")}
                     ${chip("순변동", sums.in - sums.out, sums.in - sums.out >= 0 ? "bg-slate-100 text-slate-600" : "bg-red-50 text-red-600")}
                 </div>
             </div>
