@@ -90,6 +90,11 @@ const fileStore = {
         all.push(tx);
         fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all, null, 4));
     },
+    async deleteTransaction(id) {
+        if (!fs.existsSync(TRANSACTIONS_PATH)) return;
+        const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
+        fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all.filter((t) => t.id !== id), null, 4));
+    },
 };
 
 const createPgStore = () => {
@@ -152,6 +157,9 @@ const createPgStore = () => {
         },
         async addTransaction(tx) {
             await q("INSERT INTO transactions(id, data) VALUES($1, $2) ON CONFLICT (id) DO NOTHING", [tx.id, JSON.stringify(tx)]);
+        },
+        async deleteTransaction(id) {
+            await q("DELETE FROM transactions WHERE id = $1", [id]);
         },
     };
 };
@@ -423,9 +431,15 @@ const handleApi = async (req, res, parts) => {
 
     if (collection === "data" && method === "GET") return send(res, 200, await store.readDB());
 
-    if (collection === "transactions" && method === "GET") {
-        const month = new URL(req.url, "http://localhost").searchParams.get("month") || "";
-        return send(res, 200, await store.listTransactions(month));
+    if (collection === "transactions") {
+        if (method === "GET") {
+            const month = new URL(req.url, "http://localhost").searchParams.get("month") || "";
+            return send(res, 200, await store.listTransactions(month));
+        }
+        if (method === "DELETE" && id) {
+            await store.deleteTransaction(id);
+            return send(res, 200, { ok: true });
+        }
     }
 
     if (collection === "monthly") {
@@ -500,7 +514,7 @@ const server = http.createServer(async (req, res) => {
         if (urlPath === "/api/login" || urlPath === "/api/logout") return await handleAuth(req, res, urlPath.split("/")[2]);
         if (urlPath === "/api/ingest") return await handleIngest(req, res);
         if (urlPath.startsWith("/api/")) {
-            if (!isAuthed(req) && !(urlPath === "/api/transactions" && ingestAuthed(req))) return send(res, 401, { error: "로그인이 필요합니다" });
+            if (!isAuthed(req) && !(urlPath.startsWith("/api/transactions") && ingestAuthed(req))) return send(res, 401, { error: "로그인이 필요합니다" });
             if (urlPath.startsWith("/api/system/")) return await handleSystem(req, res, urlPath.split("/")[3]);
             return await handleApi(req, res, urlPath.split("/").slice(1));
         }

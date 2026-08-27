@@ -510,10 +510,10 @@ async function renderLedger() {
     });
 }
 
-function showTxRaw(i) {
+async function showTxRaw(i) {
     const t = window._ledgerTx?.[i];
     if (!t) return;
-    Swal.fire({
+    const { isDenied } = await Swal.fire({
         title: t.title,
         html: `<div class="text-left text-sm">
             <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
@@ -522,7 +522,15 @@ function showTxRaw(i) {
         </div>`,
         confirmButtonText: "닫기",
         confirmButtonColor: "#4f46e5",
+        showDenyButton: true,
+        denyButtonText: "삭제",
+        denyButtonColor: "#dc2626",
     });
+    if (isDenied && (await confirmDelete("이 거래를 삭제합니다."))) {
+        await api("DELETE", `/api/transactions/${t.id}`);
+        toast("success", "거래가 삭제되었습니다");
+        renderLedger();
+    }
 }
 
 const prevMonth = (ym) => {
