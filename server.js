@@ -280,7 +280,7 @@ const deploy = async (message) => {
     return { ok: push.ok, log };
 };
 
-const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보/;
+const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -290,7 +290,7 @@ const parseSms = (sender, text, db) => {
     const balance = balM ? parseNum(balM[1]) : null;
     const noBal = t.replace(/잔액\s*[\d,]+\s*원?/g, "");
 
-    let kind = null, amount = null, m;
+    let kind = null, amount = null, weak = false, m;
     if ((m = noBal.match(/(자동출금|출금액|입금액|출금|입금|결제|승인)\s*([\d,]+)\s*원/))) {
         amount = parseNum(m[2]);
         kind = /입금/.test(m[1]) ? "입금" : "출금";
@@ -300,8 +300,9 @@ const parseSms = (sender, text, db) => {
     } else if ((m = noBal.match(/([\d,]+)\s*원/))) {
         amount = parseNum(m[1]);
         kind = /입금|충전/.test(noBal) ? "입금" : "출금";
+        weak = true;
     }
-    if (amount === null && AD_RE.test(sender + " " + t)) return null;
+    if ((amount === null || weak) && AD_RE.test(sender + " " + t)) return null;
     if (amount !== null && /취소/.test(t)) amount = -amount;
     if (kind === "출금" && balance === null && /승인/.test(noBal)) kind = "카드";
 
@@ -343,7 +344,7 @@ const parseSms = (sender, text, db) => {
     if (!bankId) {
         const hay = sender + " " + t;
         const hit = db.banks.find((b) =>
-            [b.name, b.name?.replace(/은행|뱅크/g, ""), b.alias].filter((n) => n && n.length >= 2).some((n) => hay.includes(n))
+            [b.name, b.name?.replace(/은행/g, ""), b.alias].filter((n) => n && n.length >= 2).some((n) => hay.includes(n))
         );
         if (hit) bankId = hit.id;
     }
