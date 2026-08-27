@@ -480,14 +480,16 @@ function drawLedger() {
                 }
                 return true;
             });
-            const need = unpaid.reduce((s, a) => s + a, 0) + (Number(b.retainAmount) || 0);
+            const retain = Number(b.retainAmount) || 0;
+            const retainUsed = Math.min(retain, pool.reduce((s, a) => s + a, 0));
+            const need = unpaid.reduce((s, a) => s + a, 0) + retain - retainUsed;
             if (c) total += c.amount;
             totalNeed += need;
             const free = c && need ? c.amount - need : null;
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "—"}</td>
-                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}</td>
+                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
                 <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? "📩 " + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
