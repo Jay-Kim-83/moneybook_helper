@@ -426,6 +426,105 @@ function renderOverview() {
         `<h2 class="text-lg font-bold text-slate-700 mb-4">은행별 연결 카드</h2><div class="grid gap-4">${sections}</div>`;
 }
 
+let ledgerMonth = new Date().toISOString().slice(0, 7);
+
+async function renderLedger() {
+    const txs = await api("GET", `/api/transactions?month=${ledgerMonth}`);
+    window._ledgerTx = txs;
+    const cb = DB.currentBalances || {};
+
+    let total = 0;
+    const balRows = DB.banks
+        .map((b) => {
+            const c = cb[b.id];
+            if (c) total += c.amount;
+            return `<tr class="border-b border-slate-100">
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "—"}</td>
+                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? "📩 " + c.at.slice(5) : "수집 전"}</td>
+            </tr>`;
+        })
+        .join("");
+
+    const sums = txs.reduce((a, t) => {
+        if (t.kind === "입금") a.in += t.amount || 0;
+        if (t.kind === "출금") a.out += t.amount || 0;
+        return a;
+    }, { in: 0, out: 0 });
+    const chip = (label, v, cls) => `<span class="text-xs px-2.5 py-1 rounded-full ${cls}">${label} ${won(v)}</span>`;
+
+    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 이체: "bg-slate-100 text-slate-500", 미분류: "bg-amber-50 text-amber-700" };
+    const txRows = txs.length
+        ? txs
+              .map((t, i) => {
+                  const srcs = [t.bankId ? bankName(t.bankId) : "", t.cardId ? DB.cards.find((c) => c.id === t.cardId)?.company || "" : ""].filter(Boolean).join(" · ");
+                  const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" ? "−" : "") + won(Math.abs(t.amount));
+                  return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
+                <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
+                <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${t.title}
+                    ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
+                    ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
+                </span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : "text-slate-400"}">${amt}</span>
+            </div>`;
+              })
+              .join("")
+        : `<p class="text-center text-slate-400 py-8">${ledgerMonth} 거래 내역이 없습니다.</p>`;
+
+    document.getElementById("tab-ledger").innerHTML = `
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
+            <h2 class="text-lg font-bold text-slate-700">잔액·거래</h2>
+            <input type="month" id="ledgerMonthPicker" value="${ledgerMonth}" class="border border-slate-300 rounded-lg px-3 py-1.5" />
+        </div>
+        <div class="grid gap-4">
+            ${card(`
+            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(문자 수집 기준)</span></h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <tbody>${balRows}</tbody>
+                    <tfoot>
+                        <tr class="border-t-2 border-slate-300 bg-slate-50">
+                            <td class="py-2.5 px-2 font-bold text-slate-800">합계</td>
+                            <td class="py-2.5 px-2 text-right tabular-nums text-base font-bold ${total >= 0 ? "text-slate-800" : "text-red-600"}">${won(total)}</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>`)}
+            ${card(`
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <h3 class="font-bold text-slate-700">${ledgerMonth} 거래 내역 <span class="text-xs font-normal text-slate-400">(${txs.length}건, 행을 누르면 원문)</span></h3>
+                <div class="flex gap-1.5 flex-wrap">
+                    ${chip("입금 +", sums.in, "bg-green-50 text-green-700")}
+                    ${chip("출금 −", sums.out, "bg-red-50 text-red-600")}
+                    ${chip("순변동", sums.in - sums.out, sums.in - sums.out >= 0 ? "bg-slate-100 text-slate-600" : "bg-red-50 text-red-600")}
+                </div>
+            </div>
+            ${txRows}`)}
+        </div>`;
+
+    document.getElementById("ledgerMonthPicker").addEventListener("change", (e) => {
+        ledgerMonth = e.target.value;
+        renderLedger();
+    });
+}
+
+function showTxRaw(i) {
+    const t = window._ledgerTx?.[i];
+    if (!t) return;
+    Swal.fire({
+        title: t.title,
+        html: `<div class="text-left text-sm">
+            <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
+            <pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${t.raw || "(원문 없음)"}</pre>
+            <p class="text-xs text-slate-400 mt-2">발신: ${t.sender || "-"}</p>
+        </div>`,
+        confirmButtonText: "닫기",
+        confirmButtonColor: "#4f46e5",
+    });
+}
+
 const prevMonth = (ym) => {
     const [y, m] = ym.split("-").map(Number);
     const d = new Date(y, m - 2, 1);
@@ -1046,6 +1145,7 @@ function showTab(name) {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
+    if (name === "ledger") renderLedger();
     if (name === "monthly") renderMonthly();
     if (name === "history") renderHistory();
     if (name === "system") renderSystem();
