@@ -430,7 +430,10 @@ let ledgerMonth = new Date().toISOString().slice(0, 7);
 let ledgerFilter = null;
 
 async function renderLedger() {
-    window._ledgerAll = await api("GET", `/api/transactions?month=${ledgerMonth}`);
+    [window._ledgerAll, window._ledgerRec] = await Promise.all([
+        api("GET", `/api/transactions?month=${ledgerMonth}`),
+        api("GET", `/api/monthly/${ledgerMonth}`),
+    ]);
     drawLedger();
 }
 
@@ -451,14 +454,29 @@ function drawLedger() {
     const txs = window._ledgerAll || [];
     const cb = DB.currentBalances || {};
 
-    let total = 0;
+    const rec = window._ledgerRec || {};
+    const needBy = {};
+    Object.entries(rec.payments || {}).forEach(([cardId, v]) => {
+        const bid = DB.cards.find((c) => c.id === cardId)?.bankId;
+        if (bid) needBy[bid] = (needBy[bid] || 0) + (Number(v) || 0);
+    });
+    (rec.expenses || []).forEach((e) => {
+        if (e.bankId) needBy[e.bankId] = (needBy[e.bankId] || 0) + (Number(e.amount) || 0);
+    });
+
+    let total = 0, totalNeed = 0;
     const balRows = DB.banks
         .map((b) => {
             const c = cb[b.id];
+            const need = needBy[b.id] || 0;
             if (c) total += c.amount;
+            totalNeed += need;
+            const free = c && need ? c.amount - need : null;
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "—"}</td>
+                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
                 <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? "📩 " + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
         })
@@ -516,14 +534,25 @@ function drawLedger() {
         </div>
         <div class="grid gap-4">
             ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(문자 수집 기준)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = ${ledgerMonth} 결제의 카드값+카드외지출 — 아직 빠져나갈 돈)</span></h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-slate-500 border-b-2 border-slate-200 text-xs">
+                            <th class="text-left py-2 px-2">은행</th>
+                            <th class="text-right py-2 px-2">현재 잔액</th>
+                            <th class="text-right py-2 px-2">유지 필요</th>
+                            <th class="text-right py-2 px-2">여유</th>
+                            <th class="text-right py-2 px-2">수집</th>
+                        </tr>
+                    </thead>
                     <tbody>${balRows}</tbody>
                     <tfoot>
                         <tr class="border-t-2 border-slate-300 bg-slate-50">
                             <td class="py-2.5 px-2 font-bold text-slate-800">합계</td>
                             <td class="py-2.5 px-2 text-right tabular-nums text-base font-bold ${total >= 0 ? "text-slate-800" : "text-red-600"}">${won(total)}</td>
+                            <td class="py-2.5 px-2 text-right tabular-nums font-bold text-orange-500">${totalNeed ? won(totalNeed) : "—"}</td>
+                            <td class="py-2.5 px-2 text-right tabular-nums font-bold ${total - totalNeed >= 0 ? "text-green-600" : "text-red-600"}">${totalNeed ? won(total - totalNeed) : "—"}</td>
                             <td></td>
                         </tr>
                     </tfoot>
