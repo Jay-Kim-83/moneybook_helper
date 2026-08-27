@@ -427,10 +427,28 @@ function renderOverview() {
 }
 
 let ledgerMonth = new Date().toISOString().slice(0, 7);
+let ledgerFilter = null;
 
 async function renderLedger() {
-    const txs = await api("GET", `/api/transactions?month=${ledgerMonth}`);
-    window._ledgerTx = txs;
+    window._ledgerAll = await api("GET", `/api/transactions?month=${ledgerMonth}`);
+    drawLedger();
+}
+
+const setLedgerFilter = (k) => {
+    ledgerFilter = ledgerFilter === k ? null : k;
+    drawLedger();
+};
+
+const LEDGER_KINDS = [
+    { key: "입금", sign: "+", amtCls: "text-green-600" },
+    { key: "출금", sign: "−", amtCls: "text-red-500" },
+    { key: "카드", sign: "−", amtCls: "text-purple-600" },
+    { key: "이체", sign: "", amtCls: "text-slate-500" },
+    { key: "미분류", sign: "", amtCls: "text-amber-600" },
+];
+
+function drawLedger() {
+    const txs = window._ledgerAll || [];
     const cb = DB.currentBalances || {};
 
     let total = 0;
@@ -446,17 +464,35 @@ async function renderLedger() {
         })
         .join("");
 
-    const sums = txs.reduce((a, t) => {
-        if (t.kind === "입금") a.in += t.amount || 0;
-        if (t.kind === "출금") a.out += t.amount || 0;
-        if (t.kind === "카드") a.card += t.amount || 0;
+    const stats = txs.reduce((a, t) => {
+        const k = t.kind || "미분류";
+        a[k] = a[k] || { sum: 0, n: 0 };
+        a[k].sum += t.amount || 0;
+        a[k].n++;
         return a;
-    }, { in: 0, out: 0, card: 0 });
-    const chip = (label, v, cls) => `<span class="text-xs px-2.5 py-1 rounded-full ${cls}">${label} ${won(v)}</span>`;
+    }, {});
+    const net = (stats["입금"]?.sum || 0) - (stats["출금"]?.sum || 0);
+    const tiles = LEDGER_KINDS.map((k) => {
+        const s = stats[k.key] || { sum: 0, n: 0 };
+        const active = ledgerFilter === k.key;
+        return `<button onclick="setLedgerFilter('${k.key}')"
+            class="rounded-xl border p-3 text-center transition ${active ? "border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50"}">
+            <p class="text-xs text-slate-500">${k.key}</p>
+            <p class="text-sm sm:text-base font-bold tabular-nums ${k.amtCls}">${k.key === "미분류" ? `${s.n}건` : k.sign + won(s.sum)}</p>
+            <p class="text-[11px] text-slate-400">${k.key === "미분류" ? "원문 보존" : `${s.n}건`}</p>
+        </button>`;
+    }).join("");
+    const netTile = `<div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+        <p class="text-xs text-slate-500">순변동</p>
+        <p class="text-sm sm:text-base font-bold tabular-nums ${net >= 0 ? "text-slate-700" : "text-red-600"}">${won(net)}</p>
+        <p class="text-[11px] text-slate-400">입금 − 출금</p>
+    </div>`;
 
     const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 미분류: "bg-amber-50 text-amber-700" };
-    const txRows = txs.length
-        ? txs
+    const shown = ledgerFilter ? txs.filter((t) => (t.kind || "미분류") === ledgerFilter) : txs;
+    window._ledgerTx = shown;
+    const txRows = shown.length
+        ? shown
               .map((t, i) => {
                   const srcs = [t.bankId ? bankName(t.bankId) : "", t.cardId ? DB.cards.find((c) => c.id === t.cardId)?.company || "" : ""].filter(Boolean).join(" · ");
                   const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
@@ -471,7 +507,7 @@ async function renderLedger() {
             </div>`;
               })
               .join("")
-        : `<p class="text-center text-slate-400 py-8">${ledgerMonth} 거래 내역이 없습니다.</p>`;
+        : `<p class="text-center text-slate-400 py-8">${ledgerFilter ? `${ledgerFilter} 거래가 없습니다.` : `${ledgerMonth} 거래 내역이 없습니다.`}</p>`;
 
     document.getElementById("tab-ledger").innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -494,14 +530,14 @@ async function renderLedger() {
                 </table>
             </div>`)}
             ${card(`
+            <h3 class="font-bold text-slate-700 mb-3">${ledgerMonth} 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
+            <div class="grid grid-cols-3 lg:grid-cols-6 gap-2">${tiles}${netTile}</div>`)}
+            ${card(`
             <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <h3 class="font-bold text-slate-700">${ledgerMonth} 거래 내역 <span class="text-xs font-normal text-slate-400">(${txs.length}건, 행을 누르면 원문)</span></h3>
-                <div class="flex gap-1.5 flex-wrap">
-                    ${chip("입금 +", sums.in, "bg-green-50 text-green-700")}
-                    ${chip("출금 −", sums.out, "bg-red-50 text-red-600")}
-                    ${chip("카드 −", sums.card, "bg-purple-50 text-purple-700")}
-                    ${chip("순변동", sums.in - sums.out, sums.in - sums.out >= 0 ? "bg-slate-100 text-slate-600" : "bg-red-50 text-red-600")}
-                </div>
+                <h3 class="font-bold text-slate-700">거래 내역
+                    <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>
+                </h3>
+                ${ledgerFilter ? `<button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button>` : ""}
             </div>
             ${txRows}`)}
         </div>`;
