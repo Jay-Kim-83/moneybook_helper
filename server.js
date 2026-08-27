@@ -280,7 +280,7 @@ const deploy = async (message) => {
     return { ok: push.ok, log };
 };
 
-const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백\s*받|걸음|혜택/;
+const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -399,7 +399,7 @@ const handleIngest = async (req, res) => {
             await store.writeDB(db);
         }
     }
-    send(res, 200, { ok: true, transaction: tx });
+    send(res, 200, { ok: true, alert: tx.status === "pending" && /(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(tx.raw), transaction: tx });
 };
 
 const handleAuth = async (req, res, action) => {
