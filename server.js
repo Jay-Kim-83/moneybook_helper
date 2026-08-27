@@ -360,7 +360,7 @@ const bearerToken = (req) => {
 const ingestAuthed = (req) => !!ingestKey && safeEqual(bearerToken(req), ingestKey);
 
 const handleIngest = async (req, res) => {
-    if (req.method !== "POST") return send(res, 404, { error: "잘못된 요청" });
+    if (req.method !== "POST") return send(res, 405, { error: "POST 전용" });
     if (!ingestKey) return send(res, 503, { error: "INGEST_KEY가 설정되지 않았습니다" });
     const raw = await readRawBody(req);
     const lines = raw.split(/\r?\n/);
@@ -380,8 +380,11 @@ const handleIngest = async (req, res) => {
     await store.addTransaction(tx);
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
-        db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
-        await store.writeDB(db);
+        const cur = db.currentBalances[tx.bankId];
+        if (!cur || String(tx.at) >= String(cur.at)) {
+            db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
+            await store.writeDB(db);
+        }
     }
     send(res, 200, { ok: true, transaction: tx });
 };
