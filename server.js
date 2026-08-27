@@ -186,9 +186,9 @@ const send = (res, status, data) => {
 
 const readRawBody = (req) =>
     new Promise((resolve) => {
-        let raw = "";
-        req.on("data", (c) => (raw += c));
-        req.on("end", () => resolve(raw));
+        const chunks = [];
+        req.on("data", (c) => chunks.push(c));
+        req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
     });
 
 const readBody = async (req) => {
