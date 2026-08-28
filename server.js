@@ -304,6 +304,7 @@ const parseSms = (sender, text, db) => {
     }
     if ((amount === null || weak) && AD_RE.test(sender + " " + t)) return null;
     if (amount !== null && /취소/.test(t)) amount = -amount;
+    if (amount !== null && /예정/.test(noBal)) kind = "안내";
     if (kind === "출금" && balance === null && /승인/.test(noBal)) kind = "카드";
 
     let title = "";

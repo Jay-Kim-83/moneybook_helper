@@ -447,6 +447,7 @@ const LEDGER_KINDS = [
     { key: "출금", sign: "−", amtCls: "text-red-500" },
     { key: "카드", sign: "−", amtCls: "text-purple-600" },
     { key: "이체", sign: "", amtCls: "text-slate-500" },
+    { key: "안내", sign: "", amtCls: "text-sky-600" },
     { key: "미분류", sign: "", amtCls: "text-amber-600" },
 ];
 
@@ -520,7 +521,7 @@ function drawLedger() {
         <p class="text-[11px] text-slate-400">입금 − 출금</p>
     </div>`;
 
-    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 미분류: "bg-amber-50 text-amber-700" };
+    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 미분류: "bg-amber-50 text-amber-700" };
     const shown = ledgerFilter ? txs.filter((t) => (t.kind || "미분류") === ledgerFilter) : txs;
     window._ledgerTx = shown;
     const txRows = shown.length
@@ -574,7 +575,7 @@ function drawLedger() {
             </div>`)}
             ${card(`
             <h3 class="font-bold text-slate-700 mb-3">${ledgerMonth} 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
-            <div class="grid grid-cols-3 lg:grid-cols-6 gap-2">${tiles}${netTile}</div>`)}
+            <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">${tiles}${netTile}</div>`)}
             ${card(`
             <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <h3 class="font-bold text-slate-700">거래 내역
