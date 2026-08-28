@@ -355,6 +355,8 @@ const parseSms = (sender, text, db) => {
             .some((n) => (sender + " " + t).includes(n) || (kind === "카드" && n.length >= 2 && t.includes(n.slice(0, 2))))
     );
 
+    if (amount === null && !bankId && !card && !/(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(t)) return null;
+
     return {
         kind: amount === null ? "미분류" : kind,
         amount,
