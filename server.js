@@ -280,7 +280,7 @@ const deploy = async (message) => {
     return { ok: push.ok, log };
 };
 
-const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보/;
+const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 
@@ -288,7 +288,7 @@ const parseSms = (sender, text, db) => {
     const t = text.replace(/\[Web발신\]/g, "").trim();
     const balM = t.match(/잔액\s*([\d,]+)/);
     const balance = balM ? parseNum(balM[1]) : null;
-    const noBal = t.replace(/잔액\s*[\d,]+\s*원?/g, "");
+    const noBal = t.replace(/잔액\s*[\d,]+\s*원?/g, "").replace(/누적(?:이용금액)?\s*[\d,]+\s*원?/g, "");
 
     let kind = null, amount = null, weak = false, m;
     if ((m = noBal.match(/(자동출금|출금액|입금액|출금|입금|결제|승인)\s*([\d,]+)\s*원/))) {
@@ -303,8 +303,9 @@ const parseSms = (sender, text, db) => {
         weak = true;
     }
     if ((amount === null || weak) && AD_RE.test(sender + " " + t)) return null;
+    if (amount === null && /누적이용금액/.test(t)) return null;
     if (amount !== null && /취소/.test(t)) amount = -amount;
-    if (amount !== null && /예정/.test(noBal)) kind = "안내";
+    if (amount !== null && /예정|내일/.test(noBal)) kind = "안내";
     if (kind === "출금" && balance === null && /승인/.test(noBal)) kind = "카드";
 
     let title = "";
