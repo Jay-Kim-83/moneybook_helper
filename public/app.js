@@ -1188,7 +1188,7 @@ const sumExpenses = (arr) => (arr || []).reduce((s, e) => s + (Number(e.amount) 
 const histItem = (label, val, color, sub = "") => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-base font-bold ${color}">${won(val)}</p>${sub ? `<p class="leading-tight">${sub}</p>` : ""}</div>`;
 
 let historyChart = null;
-const CHART_PALETTE = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1", "#a855f7", "#ec4899", "#14b8a6", "#f59e0b"];
+const CHART_PALETTE = ["#fca5a5", "#fdba74", "#fde047", "#86efac", "#67e8f9", "#a5b4fc", "#d8b4fe", "#f9a8d4", "#5eead4", "#fcd34d"];
 const cardLabel = (id) => {
     const c = DB.cards.find((x) => x.id === id);
     return c ? c.alias || c.company : `삭제된 카드(${id.slice(-4)})`;
@@ -1206,11 +1206,13 @@ function renderHistoryChart(records, actByMonth = {}) {
         data: records.map((r) => (r.payments && r.payments[id]) || 0),
         backgroundColor: CHART_PALETTE[i % CHART_PALETTE.length],
         borderRadius: 3,
+        order: 2,
     }));
-    const expBar = { type: "bar", label: "카드 외 지출", stack: "지출", data: records.map((r) => sumExpenses(r.expenses)), backgroundColor: "#94a3b8", borderRadius: 3 };
-    const balLine = { type: "line", label: "총 잔액 (우측 축)", yAxisID: "y2", data: records.map((r) => sumValues(r.balances)), borderColor: "#0f172a", borderWidth: 2, tension: 0.3, pointRadius: 3 };
+    const expBar = { type: "bar", label: "카드 외 지출", stack: "지출", data: records.map((r) => sumExpenses(r.expenses)), backgroundColor: "#cbd5e1", borderRadius: 3, order: 2 };
+    const balLine = { type: "line", label: "총 잔액 (우측 축)", yAxisID: "y2", order: 1, data: records.map((r) => sumValues(r.balances)), borderColor: "#0f172a", borderWidth: 2, tension: 0.3, pointRadius: 3 };
     const remainLine = {
         type: "line",
+        order: 1,
         label: "예상 잔액 (우측 축)",
         yAxisID: "y2",
         data: records.map((r) => sumValues(r.balances) - sumValues(r.payments) - sumExpenses(r.expenses)),
@@ -1222,6 +1224,7 @@ function renderHistoryChart(records, actByMonth = {}) {
     };
     const actOutLine = {
         type: "line",
+        order: 1,
         label: "실제 출금",
         stack: "_actOut",
         data: records.map((r) => actByMonth[r.month]?.out || 0),
@@ -1233,6 +1236,7 @@ function renderHistoryChart(records, actByMonth = {}) {
     };
     const actInLine = {
         type: "line",
+        order: 1,
         label: "실제 입금",
         stack: "_actIn",
         data: records.map((r) => actByMonth[r.month]?.in || 0),
