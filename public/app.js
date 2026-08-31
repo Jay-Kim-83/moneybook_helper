@@ -513,6 +513,28 @@ function drawLedger() {
         })
         .join("");
 
+    const approvedByCard = {};
+    txs.forEach((t) => {
+        if (t.kind === "카드" && t.cardId) approvedByCard[t.cardId] = (approvedByCard[t.cardId] || 0) + (t.amount || 0);
+    });
+    const cs = DB.cardStats || {};
+    const cardRows = DB.cards
+        .map((c) => {
+            const approved = approvedByCard[c.id] || 0;
+            const cum = cs[c.id]?.cumulative;
+            const up = cs[c.id]?.upcoming;
+            const cumThisMonth = cum && String(cum.at).startsWith(ledgerMonth);
+            const diff = approved && cumThisMonth && cum.amount !== approved ? cum.amount - approved : 0;
+            return `<tr class="border-b border-slate-100">
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">💳 ${c.company}${c.alias ? ` <span class="text-xs font-normal text-slate-400">(${c.alias})</span>` : ""}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold ${approved ? "text-purple-600" : "text-slate-300"}">${approved ? won(approved) : "—"}</td>
+                <td class="py-2 px-2 text-right tabular-nums ${cum ? "text-slate-700" : "text-slate-300"}">${cum ? won(cum.amount) : "—"}${cum ? `<span class="block text-[10px] text-slate-400">📩 ${cum.at.slice(5)}</span>` : ""}${diff ? `<span class="block text-[10px] text-amber-600">⚠ 승인 합계와 ${won(Math.abs(diff))} 차이</span>` : ""}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold ${up ? "text-red-500" : "text-slate-300"}">${up ? won(up.amount) : "—"}${up ? `<span class="block text-[10px] text-slate-400">📩 ${up.at.slice(5)}</span>` : ""}</td>
+                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">🏦 ${bankName(c.bankId)}</td>
+            </tr>`;
+        })
+        .join("");
+
     const stats = txs.reduce((a, t) => {
         const k = t.kind || "미분류";
         a[k] = a[k] || { sum: 0, n: 0 };
@@ -589,6 +611,22 @@ function drawLedger() {
                     </tfoot>
                 </table>
             </div>`)}
+            ${DB.cards.length ? card(`
+            <h3 class="font-bold text-slate-700 mb-3">카드 사용 현황 <span class="text-xs font-normal text-slate-400">(승인 합계 = ${ledgerMonth} 승인 문자 합산 · 누적/결제 예정 = 카드사 문자 수집)</span></h3>
+            <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-slate-500 border-b-2 border-slate-200 text-xs">
+                            <th class="text-left py-2 px-2">카드</th>
+                            <th class="text-right py-2 px-2">승인 합계</th>
+                            <th class="text-right py-2 px-2">카드사 누적</th>
+                            <th class="text-right py-2 px-2">결제 예정</th>
+                            <th class="text-right py-2 px-2">연결 은행</th>
+                        </tr>
+                    </thead>
+                    <tbody>${cardRows}</tbody>
+                </table>
+            </div>`) : ""}
             ${card(`
             <h3 class="font-bold text-slate-700 mb-3">${ledgerMonth} 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
             <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">${tiles}${netTile}</div>`)}
@@ -668,10 +706,11 @@ async function renderMonthly() {
         ? DB.cards
               .map((c) => {
                   const prev = previous?.payments?.[c.id];
-                  const curVal = current.payments?.[c.id] ?? "";
+                  const auto = current.payments?.[c.id] == null ? DB.cardStats?.[c.id]?.upcoming : null;
+                  const curVal = current.payments?.[c.id] ?? auto?.amount ?? "";
                   return `<div class="py-2 border-b border-slate-100 last:border-0">
             <div class="flex items-center justify-between gap-3">
-                <span class="text-slate-700">💳 ${c.company} <span class="text-xs text-slate-400">(${bankName(c.bankId)})</span></span>
+                <span class="text-slate-700">💳 ${c.company} <span class="text-xs text-slate-400">(${bankName(c.bankId)})</span>${auto ? ` <span class="text-xs text-sky-500" title="결제예정 안내 문자 자동 입력 (${auto.at})">📩 ${auto.at.slice(5)}</span>` : ""}</span>
                 <input data-payment="${c.id}" data-prev="${prev ?? ""}" value="${comma(curVal)}" type="text" inputmode="numeric" placeholder="결제 금액" oninput="formatMoneyInput(this); updateDiff('${c.id}')"
                     class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
             </div>

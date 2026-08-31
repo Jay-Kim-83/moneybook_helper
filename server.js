@@ -14,7 +14,7 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {} };
+const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {} };
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
@@ -292,6 +292,8 @@ const parseSms = (sender, text, db) => {
     const t = text.replace(/\[Web발신\]/g, "").trim();
     const balM = t.match(/잔액\s*([\d,]+)/);
     const balance = balM ? parseNum(balM[1]) : null;
+    const cumM = t.match(/누적(?:이용금액)?\s*([\d,]+)/);
+    const cumulative = cumM ? parseNum(cumM[1]) : null;
     const noBal = t.replace(/잔액\s*[\d,]+\s*원?/g, "").replace(/누적(?:이용금액)?\s*[\d,]+\s*원?/g, "");
 
     let kind = null, amount = null, weak = false, m;
@@ -369,6 +371,7 @@ const parseSms = (sender, text, db) => {
         bankId,
         cardId: card?.id || null,
         balance,
+        cumulative,
         at,
         status: amount === null ? "pending" : "ok",
     };
@@ -400,14 +403,28 @@ const handleIngest = async (req, res) => {
     if (!parsed) return send(res, 200, { ok: true, dropped: true });
     const tx = { id: genId(), sender, raw: text.trim(), category: "", ...parsed };
     await store.addTransaction(tx);
+    let dirty = false;
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
         const cur = db.currentBalances[tx.bankId];
         if (!cur || String(tx.at) >= String(cur.at)) {
             db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
-            await store.writeDB(db);
+            dirty = true;
         }
     }
+    if (tx.cardId && tx.status === "ok") {
+        db.cardStats = db.cardStats || {};
+        const s = (db.cardStats[tx.cardId] = db.cardStats[tx.cardId] || {});
+        if (tx.cumulative != null && (!s.cumulative || String(tx.at) >= String(s.cumulative.at))) {
+            s.cumulative = { amount: tx.cumulative, at: tx.at };
+            dirty = true;
+        }
+        if (tx.kind === "안내" && /결제예정/.test(tx.raw) && tx.amount != null && (!s.upcoming || String(tx.at) >= String(s.upcoming.at))) {
+            s.upcoming = { amount: tx.amount, at: tx.at };
+            dirty = true;
+        }
+    }
+    if (dirty) await store.writeDB(db);
     send(res, 200, { ok: true, alert: tx.status === "pending" && /(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(tx.raw), transaction: tx });
 };
 
