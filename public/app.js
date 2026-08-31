@@ -80,7 +80,18 @@ const formModal = async ({ title, fields, values = {} }) => {
         confirmButtonText: "저장",
         cancelButtonText: "취소",
         confirmButtonColor: "#4f46e5",
-        didOpen: () => document.getElementById(`f_${fields[0].name}`)?.focus(),
+        didOpen: () => {
+            document.getElementById(`f_${fields[0].name}`)?.focus();
+            document.querySelectorAll("[id^='f_']").forEach((el) => {
+                if (el.tagName === "INPUT")
+                    el.addEventListener("keydown", (e) => {
+                        if (e.key === "Enter") {
+                            e.preventDefault();
+                            Swal.clickConfirm();
+                        }
+                    });
+            });
+        },
         preConfirm: () => {
             const result = {};
             for (const f of fields) {
@@ -235,6 +246,16 @@ async function relaySettings(id) {
         confirmButtonText: "저장",
         cancelButtonText: "취소",
         confirmButtonColor: "#4f46e5",
+        didOpen: () => {
+            document.querySelectorAll("#r_retain, .ftAmount").forEach((el) =>
+                el.addEventListener("keydown", (e) => {
+                    if (e.key === "Enter") {
+                        e.preventDefault();
+                        Swal.clickConfirm();
+                    }
+                })
+            );
+        },
         preConfirm: () => ({
             relayExclude: document.getElementById("r_exclude").checked,
             relayTarget: document.getElementById("r_target").value,
