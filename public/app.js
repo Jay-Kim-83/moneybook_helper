@@ -442,6 +442,22 @@ const setLedgerFilter = (k) => {
     drawLedger();
 };
 
+async function editBalance(bankId) {
+    const b = DB.banks.find((x) => x.id === bankId);
+    const cur = DB.currentBalances?.[bankId];
+    const v = await formModal({
+        title: `${b.name} 현재 잔액 입력`,
+        fields: [{ name: "amount", label: "현재 잔액 (오늘 통장 기준)", type: "number", required: true }],
+        values: { amount: cur?.amount ?? "" },
+    });
+    if (!v) return;
+    const saved = await api("PUT", `/api/balances/${bankId}`, { amount: v.amount });
+    DB.currentBalances = DB.currentBalances || {};
+    DB.currentBalances[bankId] = saved;
+    drawLedger();
+    toast("success", `${b.name} 잔액이 입력되었습니다`);
+}
+
 const LEDGER_KINDS = [
     { key: "입금", sign: "+", amtCls: "text-green-600" },
     { key: "출금", sign: "−", amtCls: "text-red-500" },
@@ -489,10 +505,10 @@ function drawLedger() {
             const free = c && need ? c.amount - need : null;
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
-                <td class="py-2 px-2 text-right tabular-nums font-bold ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "—"}</td>
+                <td onclick="editBalance('${b.id}')" title="클릭해서 잔액 직접 입력" class="py-2 px-2 text-right tabular-nums font-bold cursor-pointer hover:bg-slate-50 ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "✏️ 입력"}</td>
                 <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
-                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? "📩 " + c.at.slice(5) : "수집 전"}</td>
+                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? (c.manual ? "✏️ " : "📩 ") + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
         })
         .join("");

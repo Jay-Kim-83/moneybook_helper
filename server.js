@@ -283,6 +283,10 @@ const deploy = async (message) => {
 const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해보|확인해봐|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
+const kstNow = () => {
+    const d = new Date(Date.now() + 9 * 3600 * 1000);
+    return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+};
 
 const parseSms = (sender, text, db) => {
     const t = text.replace(/\[Web발신\]/g, "").trim();
@@ -464,6 +468,16 @@ const handleApi = async (req, res, parts) => {
             await store.deleteMonthly(id);
             return send(res, 200, { ok: true });
         }
+    }
+
+    if (collection === "balances" && method === "PUT" && id) {
+        const { amount } = await readBody(req);
+        const db = await store.readDB();
+        if (!db.banks.find((b) => b.id === id)) return send(res, 404, { error: "은행을 찾을 수 없습니다" });
+        db.currentBalances = db.currentBalances || {};
+        db.currentBalances[id] = { amount: Number(amount) || 0, at: kstNow(), manual: true };
+        await store.writeDB(db);
+        return send(res, 200, db.currentBalances[id]);
     }
 
     if (collection === "banks" && id === "reorder" && method === "POST") {
