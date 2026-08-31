@@ -1185,7 +1185,7 @@ function renderAll() {
 
 const sumValues = (obj) => Object.values(obj || {}).reduce((s, v) => s + (Number(v) || 0), 0);
 const sumExpenses = (arr) => (arr || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-const histItem = (label, val, color) => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-base font-bold ${color}">${won(val)}</p></div>`;
+const histItem = (label, val, color, sub = "") => `<div class="text-center"><p class="text-xs text-slate-500">${label}</p><p class="text-base font-bold ${color}">${won(val)}</p>${sub ? `<p class="leading-tight">${sub}</p>` : ""}</div>`;
 
 let historyChart = null;
 const CHART_PALETTE = ["#ef4444", "#f97316", "#eab308", "#22c55e", "#06b6d4", "#6366f1", "#a855f7", "#ec4899", "#14b8a6", "#f59e0b"];
@@ -1238,36 +1238,85 @@ function renderHistoryChart(records) {
     });
 }
 
+const histDiff = (cur, prev, invert = false) => {
+    if (prev == null) return "";
+    const d = cur - prev;
+    if (d === 0) return `<span class="text-[10px] text-slate-400">전기간과 동일</span>`;
+    const worse = invert ? d < 0 : d > 0;
+    return `<span class="text-[10px] ${worse ? "text-red-500" : "text-green-600"}">${d > 0 ? "▲" : "▼"} ${won(Math.abs(d))}</span>`;
+};
+
 async function renderHistory() {
     const records = await api("GET", "/api/monthly");
+    const day = cycleDay();
+    const actuals = await Promise.all(
+        records.map((r) => {
+            const p = cyclePeriod(r.month, day);
+            return api("GET", `/api/transactions?from=${p.start}&to=${p.end}`).catch(() => []);
+        })
+    );
     const list = records.length
         ? records
-              .map((r) => {
+              .map((r, idx) => {
                   const bal = sumValues(r.balances), pay = sumValues(r.payments), exp = sumExpenses(r.expenses);
                   const remain = bal - pay - exp;
+                  const p = cyclePeriod(r.month, day);
+                  const prev = records[idx + 1];
+                  const prevPay = prev ? sumValues(prev.payments) : null;
+                  const prevExp = prev ? sumExpenses(prev.expenses) : null;
+                  const act = actuals[idx].reduce(
+                      (a, t) => {
+                          if (t.kind === "입금") a.in += t.amount || 0;
+                          if (t.kind === "출금") a.out += t.amount || 0;
+                          if (t.kind === "카드") a.card += t.amount || 0;
+                          return a;
+                      },
+                      { in: 0, out: 0, card: 0 }
+                  );
+                  const hasAct = actuals[idx].length > 0;
+                  const planSpend = pay + exp;
+                  const doneN = r.plan?.filter((x) => r.transfersDone?.[x.key]).length || 0;
                   return card(`
-            <div class="flex items-center justify-between mb-3">
-                <h3 class="font-bold text-slate-800 text-lg">${r.month}</h3>
+            <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
+                <h3 class="font-bold text-slate-800 text-lg">${r.month} <span class="text-sm font-normal text-slate-400 tabular-nums">(${p.start.slice(5).replace("-", ".")} ~ ${p.end.slice(5).replace("-", ".")})</span></h3>
                 <div class="flex gap-3">
                     <button onclick="viewMonth('${r.month}')" class="text-indigo-600 hover:underline text-sm">보기</button>
                     <button onclick="deleteMonth('${r.month}')" class="text-red-600 hover:underline text-sm">삭제</button>
                 </div>
             </div>
+            <p class="text-[11px] font-bold text-slate-400 mb-1">계획 (${day}일 입력 기준)</p>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 ${histItem("총 잔액", bal, "text-slate-800")}
-                ${histItem("카드 결제", pay, "text-red-500")}
-                ${histItem("카드 외 지출", exp, "text-orange-500")}
+                ${histItem("카드 결제", pay, "text-red-500", histDiff(pay, prevPay))}
+                ${histItem("카드 외 지출", exp, "text-orange-500", histDiff(exp, prevExp))}
                 ${histItem("예상 잔액", remain, remain >= 0 ? "text-green-600" : "text-red-600")}
             </div>
+            ${hasAct ? `
+            <p class="text-[11px] font-bold text-slate-400 mt-3 mb-1">실제 (문자 수집 기준, ${actuals[idx].length}건)</p>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                ${histItem("입금", act.in, "text-green-600")}
+                ${histItem("출금", act.out, "text-red-500", planSpend ? histDiff(act.out, planSpend).replace("전기간과 동일", "계획과 동일") + `<span class="text-[10px] text-slate-400"> (계획 대비)</span>` : "")}
+                ${histItem("카드 승인", act.card, "text-purple-600")}
+                ${histItem("순변동", act.in - act.out, act.in - act.out >= 0 ? "text-slate-700" : "text-red-600")}
+            </div>` : ""}
             ${r.plan?.length ? `
-            <div class="mt-3 pt-3 border-t border-slate-100">
-                <p class="text-xs font-bold text-slate-500 mb-1">이체 플랜 (${r.plan.filter((p) => r.transfersDone?.[p.key]).length}/${r.plan.length} 완료)</p>
+            <details class="mt-3 pt-3 border-t border-slate-100">
+                <summary class="text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-indigo-600">이체 플랜 ${doneN}/${r.plan.length} 완료 ${doneN === r.plan.length ? "✅" : ""} <span class="font-normal text-slate-400">(펼치기)</span></summary>
+                <div class="mt-1">
                 ${r.plan
                     .map(
-                        (p) => `<p class="text-xs text-slate-600 py-0.5">${r.transfersDone?.[p.key] ? "✅" : "⬜"} ${p.from} → ${p.to} <b class="tabular-nums">${won(p.amount)}</b>${p.fixed ? ' <span class="text-amber-600">고정</span>' : ""}${p.back ? ' <span class="text-emerald-600">반환</span>' : ""}${p.kind === "expense" ? ' <span class="text-orange-500">지출</span>' : ""}</p>`
+                        (x) => `<p class="text-xs text-slate-600 py-0.5">${r.transfersDone?.[x.key] ? "✅" : "⬜"} ${x.from} → ${x.to} <b class="tabular-nums">${won(x.amount)}</b>${x.fixed ? ' <span class="text-amber-600">고정</span>' : ""}${x.back ? ' <span class="text-emerald-600">반환</span>' : ""}${x.kind === "expense" ? ' <span class="text-orange-500">지출</span>' : ""}</p>`
                     )
                     .join("")}
-            </div>` : ""}`);
+                </div>
+            </details>` : ""}
+            ${r.transferLog?.length ? `
+            <details class="mt-2">
+                <summary class="text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-indigo-600">📜 이체 로그 (${r.transferLog.length}건)</summary>
+                <div class="mt-1">
+                ${r.transferLog.map((l) => `<p class="text-xs py-0.5 ${l.undo ? "text-slate-400" : "text-slate-600"}"><span class="text-slate-400 tabular-nums">${l.at}</span> ${l.text}</p>`).join("")}
+                </div>
+            </details>` : ""}`);
               })
               .join("")
         : emptyState("저장된 결제 이력이 없습니다. '이번달 결제'에서 입력 후 저장하세요.");
