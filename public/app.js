@@ -798,9 +798,17 @@ const prevMonth = (ym) => {
 };
 
 const monthlyEl = document.getElementById("tab-monthly");
-let selectedMonth = new Date().toISOString().slice(0, 7);
+let selectedMonth = null;
+
+function moveMonthly(dir) {
+    const [y, m] = selectedMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + dir, 1);
+    selectedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    renderMonthly();
+}
 
 async function renderMonthly() {
+    if (!selectedMonth) selectedMonth = currentAnchor(cycleDay());
     const current = (await api("GET", `/api/monthly/${selectedMonth}`)) || { month: selectedMonth, balances: {}, payments: {}, expenses: [] };
     const previous = await api("GET", `/api/monthly/${prevMonth(selectedMonth)}`);
     window._monthlyExpenses = current.expenses?.length
@@ -844,10 +852,15 @@ async function renderMonthly() {
               .join("")
         : emptyState("등록된 카드가 없습니다.");
 
+    const mPeriod = cyclePeriod(selectedMonth, cycleDay());
     monthlyEl.innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
             <h2 class="text-lg font-bold text-slate-700">이번달 결제 입력</h2>
-            <input type="month" id="monthPicker" value="${selectedMonth}" class="border border-slate-300 rounded-lg px-3 py-1.5" />
+            <div class="flex items-center gap-1.5">
+                <button onclick="moveMonthly(-1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">◀</button>
+                <span title="기록 키: ${selectedMonth}" class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${mPeriod.start.replace(/-/g, ".")} ~ ${mPeriod.end.replace(/-/g, ".")}</span>
+                <button onclick="moveMonthly(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
+            </div>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
             ${card(`<h3 class="font-bold text-slate-700 mb-2">① 은행 잔액</h3>${balanceRows}`)}
@@ -866,10 +879,6 @@ async function renderMonthly() {
             <button onclick="saveMonthly()" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-6 py-2.5 rounded-lg transition">저장하기</button>
         </div>`;
 
-    document.getElementById("monthPicker").addEventListener("change", (e) => {
-        selectedMonth = e.target.value;
-        renderMonthly();
-    });
     renderMonthlyExpenses();
     renderSummary();
 }
