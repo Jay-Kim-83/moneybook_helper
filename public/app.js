@@ -444,6 +444,31 @@ const setLedgerFilter = (k) => {
     drawLedger();
 };
 
+function showNeedTip(el, bankId) {
+    hideNeedTip();
+    const html = window._needTips?.[bankId];
+    if (!html) return;
+    const tip = document.createElement("div");
+    tip.id = "needTip";
+    tip.className = "fixed z-50 w-64 bg-slate-800 text-white text-xs rounded-xl p-3 shadow-2xl";
+    tip.innerHTML = `<div id="needTipArrow" class="absolute w-2.5 h-2.5 bg-slate-800 rotate-45"></div>${html}`;
+    document.body.appendChild(tip);
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.right - 256, window.innerWidth - 272));
+    tip.style.left = left + "px";
+    const arrow = tip.querySelector("#needTipArrow");
+    arrow.style.right = Math.max(12, left + 256 - r.right + 24) + "px";
+    if (r.bottom + tip.offsetHeight + 14 > window.innerHeight) {
+        tip.style.top = r.top - tip.offsetHeight - 8 + "px";
+        arrow.style.bottom = "-5px";
+    } else {
+        tip.style.top = r.bottom + 8 + "px";
+        arrow.style.top = "-5px";
+    }
+}
+
+const hideNeedTip = () => document.getElementById("needTip")?.remove();
+
 async function editBalance(bankId) {
     const b = DB.banks.find((x) => x.id === bankId);
     const cur = DB.currentBalances?.[bankId];
@@ -476,13 +501,14 @@ function drawLedger() {
     const rec = window._ledgerRec || {};
     const dueBy = {};
     Object.entries(rec.payments || {}).forEach(([cardId, v]) => {
-        const bid = DB.cards.find((c) => c.id === cardId)?.bankId;
-        if (bid && Number(v)) (dueBy[bid] = dueBy[bid] || []).push(Number(v));
+        const cardObj = DB.cards.find((c) => c.id === cardId);
+        if (cardObj?.bankId && Number(v)) (dueBy[cardObj.bankId] = dueBy[cardObj.bankId] || []).push({ label: `💳 ${cardObj.company}`, amount: Number(v) });
     });
     (rec.expenses || []).forEach((e) => {
-        if (e.bankId && Number(e.amount)) (dueBy[e.bankId] = dueBy[e.bankId] || []).push(Number(e.amount));
+        if (e.bankId && Number(e.amount)) (dueBy[e.bankId] = dueBy[e.bankId] || []).push({ label: `🧾 ${e.name}`, amount: Number(e.amount) });
     });
 
+    window._needTips = {};
     let total = 0, totalNeed = 0;
     const balRows = DB.banks
         .map((b) => {
@@ -490,25 +516,40 @@ function drawLedger() {
             const due = dueBy[b.id] || [];
             const pool = txs.filter((t) => t.bankId === b.id && t.kind === "출금" && t.amount > 0).map((t) => t.amount);
             let paid = 0;
-            const unpaid = due.filter((a) => {
-                const i = pool.indexOf(a);
+            due.forEach((item) => {
+                const i = pool.indexOf(item.amount);
                 if (i >= 0) {
                     pool.splice(i, 1);
-                    paid += a;
-                    return false;
+                    item.paid = true;
+                    paid += item.amount;
                 }
-                return true;
             });
             const retain = Number(b.retainAmount) || 0;
             const retainUsed = Math.min(retain, pool.reduce((s, a) => s + a, 0));
-            const need = unpaid.reduce((s, a) => s + a, 0) + retain - retainUsed;
+            const need = due.filter((d) => !d.paid).reduce((s, d) => s + d.amount, 0) + retain - retainUsed;
             if (c) total += c.amount;
             totalNeed += need;
             const free = c && need ? c.amount - need : null;
+
+            if (due.length || retain) {
+                const tipRow = (label, amount, opt = {}) =>
+                    `<div class="flex justify-between gap-3 py-0.5 ${opt.dim ? "text-slate-400" : ""}">
+                        <span class="${opt.strike ? "line-through" : ""}">${label}</span>
+                        <span class="tabular-nums ${opt.strike ? "line-through" : ""}">${won(amount)}${opt.check ? ' <span class="text-green-400 no-underline">✓</span>' : ""}</span>
+                    </div>`;
+                window._needTips[b.id] =
+                    `<p class="font-bold text-slate-200 mb-2">🏦 ${b.name} 유지 필요 내역</p>` +
+                    due.map((d) => tipRow(d.label, d.amount, d.paid ? { strike: true, dim: true, check: true } : {})).join("") +
+                    (retain ? tipRow("🔒 남길 금액", retain) : "") +
+                    (retainUsed ? tipRow("&nbsp;&nbsp;↳ 출금 소진", -retainUsed, { dim: true }) : "") +
+                    `<div class="border-t border-slate-600 mt-2 pt-2 flex justify-between gap-3 font-bold"><span>유지 필요</span><span class="tabular-nums text-orange-300">${won(need)}</span></div>` +
+                    (paid ? `<p class="text-[10px] text-green-400 mt-1">✓ 취소선 = 이미 출금 확인되어 차감된 항목</p>` : "");
+            }
+
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
                 <td onclick="editBalance('${b.id}')" title="클릭해서 잔액 직접 입력" class="py-2 px-2 text-right tabular-nums font-bold cursor-pointer hover:bg-slate-50 ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "✏️ 입력"}</td>
-                <td class="py-2 px-2 text-right tabular-nums ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
+                <td ${window._needTips[b.id] ? `onmouseenter="showNeedTip(this, '${b.id}')" onmouseleave="hideNeedTip()" onclick="showNeedTip(this, '${b.id}')"` : ""} class="py-2 px-2 text-right tabular-nums ${window._needTips[b.id] ? "cursor-help" : ""} ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
                 <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? (c.manual ? "✏️ " : "📩 ") + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
