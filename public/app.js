@@ -225,6 +225,104 @@ const reload = async () => {
     renderAll();
 };
 
+const SECRET_FIELDS = {
+    bank: [
+        { name: "accountNo", label: "계좌번호", required: true },
+        { name: "hint", label: "힌트 (평문 저장 — 예: 급여 통장)" },
+    ],
+    card: [
+        { name: "cardNo", label: "카드번호", required: true },
+        { name: "cvc", label: "CVC" },
+        { name: "expiry", label: "만료 (MM/YY)" },
+        { name: "hint", label: "힌트 (평문 저장)" },
+    ],
+};
+const SECRET_LABELS = { accountNo: "계좌번호", cardNo: "카드번호", cvc: "CVC", expiry: "만료" };
+
+const secretName = (type, id) => (type === "bank" ? bankName(id) : DB.cards.find((c) => c.id === id)?.company || "카드");
+
+async function secretOpen(type, id) {
+    const name = secretName(type, id);
+    const meta = DB.secrets?.[id];
+    if (!meta?.has) return secretEdit(type, id);
+    const { isConfirmed, isDenied } = await Swal.fire({
+        title: `🔒 ${name} 보안 정보`,
+        html: `<div class="text-left text-sm">
+            <p class="text-slate-600">힌트: <b>${meta.hint || "(없음)"}</b></p>
+            <p class="text-xs text-slate-400 mt-2">암호화되어 저장되어 있습니다. [보기]를 누르면 복호화해 표시합니다.</p>
+            <button onclick="secretDelete('${type}', '${id}')" class="mt-3 text-xs text-red-500 hover:underline">🗑️ 저장된 보안 정보 삭제</button>
+        </div>`,
+        showDenyButton: true,
+        showCancelButton: true,
+        confirmButtonText: "보기",
+        denyButtonText: "수정",
+        cancelButtonText: "닫기",
+        confirmButtonColor: "#4f46e5",
+        denyButtonColor: "#64748b",
+    });
+    if (isDenied) return secretEdit(type, id);
+    if (!isConfirmed) return;
+    try {
+        const r = await api("POST", `/api/secrets/${id}/reveal`);
+        window._secretVals = r.fields;
+        const rows = Object.entries(r.fields)
+            .filter(([, v]) => v)
+            .map(
+                ([k, v]) => `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-slate-100">
+                <span class="text-slate-500 text-sm shrink-0">${SECRET_LABELS[k] || k}</span>
+                <span class="font-mono text-slate-800 tabular-nums">${v}</span>
+                <button onclick="copySecret('${k}')" class="text-xs text-indigo-600 hover:underline shrink-0">복사</button>
+            </div>`
+            )
+            .join("");
+        await Swal.fire({
+            title: `🔒 ${name}`,
+            html: `<div class="text-left">${rows}<p class="text-xs text-slate-400 mt-3">창을 닫으면 화면에서 사라집니다.</p></div>`,
+            confirmButtonText: "닫기",
+            confirmButtonColor: "#4f46e5",
+        });
+        window._secretVals = null;
+    } catch (e) {
+        toast("error", e.message);
+    }
+}
+
+async function secretEdit(type, id) {
+    const name = secretName(type, id);
+    const meta = DB.secrets?.[id];
+    let values = { hint: meta?.hint || "" };
+    if (meta?.has) {
+        try {
+            const r = await api("POST", `/api/secrets/${id}/reveal`);
+            values = { ...r.fields, hint: r.hint };
+        } catch {}
+    }
+    const v = await formModal({ title: `🔒 ${name} 보안 정보 ${meta?.has ? "수정" : "등록"}`, fields: SECRET_FIELDS[type], values });
+    if (!v) return;
+    await api("PUT", `/api/secrets/${id}`, v);
+    await reload();
+    toast("success", "암호화되어 저장되었습니다");
+}
+
+async function secretDelete(type, id) {
+    Swal.close();
+    if (!(await confirmDelete("저장된 보안 정보를 삭제합니다."))) return;
+    await api("DELETE", `/api/secrets/${id}`);
+    await reload();
+    toast("success", "보안 정보가 삭제되었습니다");
+}
+
+async function copySecret(k) {
+    const v = window._secretVals?.[k];
+    if (v == null) return;
+    try {
+        await navigator.clipboard.writeText(String(v));
+        toast("success", "복사되었습니다");
+    } catch {
+        toast("error", "복사 실패");
+    }
+}
+
 const relayChain = () => DB.banks.filter((b) => !b.relayExclude);
 
 const relayBadges = (b) => {
@@ -263,6 +361,7 @@ function renderBanks() {
                 <div class="flex items-center gap-2 shrink-0">
                     <button onclick="moveBank('${b.id}', -1)" class="text-slate-400 hover:text-indigo-600 text-sm ${i === 0 ? "invisible" : ""}">▲</button>
                     <button onclick="moveBank('${b.id}', 1)" class="text-slate-400 hover:text-indigo-600 text-sm ${i === DB.banks.length - 1 ? "invisible" : ""}">▼</button>
+                    <button onclick="secretOpen('bank', '${b.id}')" title="계좌번호 보안 저장" class="text-sm ${DB.secrets?.[b.id]?.has ? "text-amber-500" : "text-slate-300"} hover:text-amber-600">🔒</button>
                     <button onclick="relaySettings('${b.id}')" class="text-emerald-600 hover:underline text-sm">이체 설정</button>
                     <button onclick="editBank('${b.id}')" class="text-indigo-600 hover:underline text-sm">수정</button>
                     <button onclick="deleteBank('${b.id}')" class="text-red-600 hover:underline text-sm">삭제</button>
@@ -415,6 +514,7 @@ function renderCards() {
                     ${c.payDay ? `<span class="inline-block mt-2 ml-1 text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">📅 매월 ${c.payDay}일 결제</span>` : ""}
                 </div>
                 <div class="flex gap-2 shrink-0">
+                    <button onclick="secretOpen('card', '${c.id}')" title="카드번호 보안 저장" class="text-sm ${DB.secrets?.[c.id]?.has ? "text-amber-500" : "text-slate-300"} hover:text-amber-600">🔒</button>
                     <button onclick="editCard('${c.id}')" class="text-indigo-600 hover:underline text-sm">수정</button>
                     <button onclick="deleteCard('${c.id}')" class="text-red-600 hover:underline text-sm">삭제</button>
                 </div>

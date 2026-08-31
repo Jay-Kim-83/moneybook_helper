@@ -14,7 +14,7 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {}, settings: {} };
+const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} };
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
@@ -194,6 +194,24 @@ if (!ingestKey && !IS_PROD) {
     ingestKey = "moneybook-ingest";
     console.warn("⚠ INGEST_KEY 미설정 — 개발용 기본 키 'moneybook-ingest' 사용 중 (배포 시 반드시 환경변수로 설정)");
 }
+let dataKey = process.env.DATA_KEY || "";
+if (!dataKey && !IS_PROD) {
+    dataKey = "moneybook-dev-datakey";
+    console.warn("⚠ DATA_KEY 미설정 — 개발용 기본 키 사용 중 (보안 정보 저장 기능을 쓰려면 배포 시 환경변수로 설정)");
+}
+const encKey = () => crypto.createHash("sha256").update(dataKey).digest();
+const encryptText = (plain) => {
+    const iv = crypto.randomBytes(12);
+    const c = crypto.createCipheriv("aes-256-gcm", encKey(), iv);
+    const ct = Buffer.concat([c.update(plain, "utf8"), c.final()]);
+    return [iv, c.getAuthTag(), ct].map((b) => b.toString("base64")).join(".");
+};
+const decryptText = (blob) => {
+    const [iv, tag, ct] = blob.split(".").map((s) => Buffer.from(s, "base64"));
+    const d = crypto.createDecipheriv("aes-256-gcm", encKey(), iv);
+    d.setAuthTag(tag);
+    return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
+};
 
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
@@ -487,7 +505,43 @@ const handleApi = async (req, res, parts) => {
     const [, collection, id] = parts;
     const method = req.method;
 
-    if (collection === "data" && method === "GET") return send(res, 200, await store.readDB());
+    if (collection === "data" && method === "GET") {
+        const db = await store.readDB();
+        const secretMeta = {};
+        Object.entries(db.secrets || {}).forEach(([k, v]) => (secretMeta[k] = { hint: v.hint || "", has: true }));
+        return send(res, 200, { ...db, secrets: secretMeta });
+    }
+
+    if (collection === "secrets" && id) {
+        if (!dataKey) return send(res, 503, { error: "DATA_KEY가 설정되지 않았습니다" });
+        const db = await store.readDB();
+        if (method === "POST" && parts[3] === "reveal") {
+            const s = db.secrets?.[id];
+            if (!s) return send(res, 404, { error: "저장된 보안 정보가 없습니다" });
+            try {
+                return send(res, 200, { fields: JSON.parse(decryptText(s.data)), hint: s.hint || "" });
+            } catch {
+                return send(res, 500, { error: "복호화 실패 — DATA_KEY가 변경되었는지 확인하세요" });
+            }
+        }
+        if (method === "PUT") {
+            const body = await readBody(req);
+            const { hint = "", ...fields } = body;
+            db.secrets = db.secrets || {};
+            db.secrets[id] = { data: encryptText(JSON.stringify(fields)), hint: String(hint) };
+            const bank = db.banks.find((b) => b.id === id);
+            const cardObj = db.cards.find((c) => c.id === id);
+            if (bank && fields.accountNo) bank.accountLast4 = String(fields.accountNo).replace(/\D/g, "").slice(-4);
+            if (cardObj && fields.cardNo) cardObj.cardLast4 = String(fields.cardNo).replace(/\D/g, "").slice(-4);
+            await store.writeDB(db);
+            return send(res, 200, { ok: true });
+        }
+        if (method === "DELETE") {
+            if (db.secrets) delete db.secrets[id];
+            await store.writeDB(db);
+            return send(res, 200, { ok: true });
+        }
+    }
 
     if (collection === "settings" && method === "PUT") {
         const body = await readBody(req);
