@@ -645,7 +645,10 @@ function drawLedger() {
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">💳 ${c.company}${c.alias ? ` <span class="text-xs font-normal text-slate-400">(${c.alias})</span>` : ""}${c.payDay ? `<span class="block text-[10px] text-slate-400">📅 매월 ${c.payDay}일</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${approved ? "text-purple-600" : "text-slate-300"}">${approved ? won(approved) : "—"}</td>
                 <td class="py-2 px-2 text-right tabular-nums ${cum ? "text-slate-700" : "text-slate-300"}">${cum ? won(cum.amount) : "—"}${cum ? `<span class="block text-[10px] text-slate-400">📩 ${cum.at.slice(5)}</span>` : ""}${diff ? `<span class="block text-[10px] text-amber-600">⚠ 승인 합계와 ${won(Math.abs(diff))} 차이</span>` : ""}</td>
-                <td class="py-2 px-2 text-right tabular-nums font-bold ${up ? "text-red-500" : "text-slate-300"}">${up ? won(up.amount) : "—"}${up ? `<span class="block text-[10px] text-slate-400">📩 ${up.at.slice(5)}</span>` : ""}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold ${up ? "text-red-500" : "text-slate-300"}">${up ? won(up.amount) : "—"}${up ? `<span class="block text-[10px] text-slate-400">📩 ${up.at.slice(5)}</span>` : ""}${(() => {
+                    const entered = Number(window._ledgerRec?.payments?.[c.id]) || 0;
+                    return up && entered && entered !== up.amount ? `<span class="block text-[10px] text-amber-600">⚠ 입력값 ${won(entered)}과 ${won(Math.abs(entered - up.amount))} 차이</span>` : "";
+                })()}</td>
                 <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">🏦 ${bankName(c.bankId)}</td>
             </tr>`;
         })
@@ -825,15 +828,17 @@ async function renderMonthly() {
               .map((c) => {
                   const prev = previous?.payments?.[c.id];
                   const up = DB.cardStats?.[c.id]?.upcoming;
-                  const auto = current.payments?.[c.id] == null && up && String(up.at).startsWith(selectedMonth) ? up : null;
+                  const upRel = up && String(up.at).startsWith(selectedMonth) ? up : null;
+                  const auto = current.payments?.[c.id] == null ? upRel : null;
                   const curVal = current.payments?.[c.id] ?? auto?.amount ?? "";
                   return `<div class="py-2 border-b border-slate-100 last:border-0">
             <div class="flex items-center justify-between gap-3">
                 <span class="text-slate-700">💳 ${c.company} <span class="text-xs text-slate-400">(${bankName(c.bankId)})</span>${auto ? ` <span class="text-xs text-sky-500" title="결제예정 안내 문자 자동 입력 (${auto.at})">📩 ${auto.at.slice(5)}</span>` : ""}</span>
-                <input data-payment="${c.id}" data-prev="${prev ?? ""}" value="${comma(curVal)}" type="text" inputmode="numeric" placeholder="결제 금액" oninput="formatMoneyInput(this); updateDiff('${c.id}')"
+                <input data-payment="${c.id}" data-prev="${prev ?? ""}" data-upcoming="${upRel?.amount ?? ""}" value="${comma(curVal)}" type="text" inputmode="numeric" placeholder="결제 금액" oninput="formatMoneyInput(this); updateDiff('${c.id}')"
                     class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
             </div>
             <p data-diff="${c.id}" class="text-xs text-right mt-1 text-slate-400">${diffText(curVal, prev)}</p>
+            <p data-updiff="${c.id}" class="text-xs text-right mt-0.5">${upDiffText(curVal, upRel?.amount)}</p>
         </div>`;
               })
               .join("")
@@ -869,6 +874,13 @@ async function renderMonthly() {
     renderSummary();
 }
 
+const upDiffText = (cur, upAmount) => {
+    if (upAmount == null || upAmount === "" || cur === "" || cur == null) return "";
+    const d = toNum(cur) - Number(upAmount);
+    if (d === 0) return `<span class="text-green-600">📩 안내 금액과 일치</span>`;
+    return `<span class="text-amber-600">📩 안내 ${won(upAmount)}과 ${d > 0 ? "▲" : "▼"} ${won(Math.abs(d))} 차이</span>`;
+};
+
 const diffText = (cur, prev) => {
     if (prev === undefined || prev === null || prev === "") return "전월 기록 없음";
     if (cur === "" || cur === undefined) return `전월 ${won(prev)}`;
@@ -885,6 +897,8 @@ function updateDiff(cardId) {
     const cur = input.value;
     el.textContent = diffText(cur, prev);
     el.className = "text-xs text-right mt-1 " + (cur === "" || prev === null ? "text-slate-400" : toNum(cur) - prev > 0 ? "text-red-500" : toNum(cur) - prev < 0 ? "text-green-600" : "text-slate-400");
+    const upEl = document.querySelector(`[data-updiff="${cardId}"]`);
+    if (upEl) upEl.innerHTML = upDiffText(cur, input.dataset.upcoming || null);
     renderSummary();
 }
 
