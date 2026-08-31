@@ -1787,7 +1787,6 @@ async function loadStorageBadge() {
 
 (async () => {
     await reload();
-    const saved = localStorage.getItem("activeTab");
-    if (saved && document.getElementById(`tab-${saved}`)) showTab(saved);
+    showTab("ledger");
 })();
 loadStorageBadge();
