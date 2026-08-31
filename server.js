@@ -413,7 +413,9 @@ const handleIngest = async (req, res) => {
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
         const cur = db.currentBalances[tx.bankId];
-        if (!cur || String(tx.at) >= String(cur.at)) {
+        const chained = cur && tx.balance === cur.amount + (tx.kind === "입금" ? tx.amount : -(tx.amount || 0));
+        const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && chained);
+        if (newer) {
             db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
             dirty = true;
         }
