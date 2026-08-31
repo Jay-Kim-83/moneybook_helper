@@ -428,12 +428,63 @@ function renderOverview() {
         `<h2 class="text-lg font-bold text-slate-700 mb-4">은행별 연결 카드</h2><div class="grid gap-4">${sections}</div>`;
 }
 
-let ledgerMonth = new Date().toISOString().slice(0, 7);
+let ledgerMonth = null;
 let ledgerFilter = null;
 
+const cycleDay = () => Number(DB.settings?.cycleStartDay) || 25;
+
+const pad0 = (n) => String(n).padStart(2, "0");
+
+function cyclePeriod(anchor, day) {
+    const [y, m] = anchor.split("-").map(Number);
+    const endD = new Date(y, m, day - 1);
+    return {
+        start: `${y}-${pad0(m)}-${pad0(day)}`,
+        end: `${endD.getFullYear()}-${pad0(endD.getMonth() + 1)}-${pad0(endD.getDate())}`,
+    };
+}
+
+function currentAnchor(day) {
+    const now = new Date();
+    let y = now.getFullYear(), m = now.getMonth() + 1;
+    if (now.getDate() < day) {
+        m -= 1;
+        if (m === 0) {
+            m = 12;
+            y -= 1;
+        }
+    }
+    return `${y}-${pad0(m)}`;
+}
+
+function moveLedger(dir) {
+    const [y, m] = ledgerMonth.split("-").map(Number);
+    const d = new Date(y, m - 1 + dir, 1);
+    ledgerMonth = `${d.getFullYear()}-${pad0(d.getMonth() + 1)}`;
+    renderLedger();
+}
+
+async function setCycleDay() {
+    const v = await formModal({
+        title: "기간 기준일 설정",
+        fields: [{ name: "day", label: "시작일 (1~28 — 예: 25 = 전달 25일 ~ 이번달 24일)", type: "number", required: true }],
+        values: { day: cycleDay() },
+    });
+    if (!v) return;
+    const d = Number(v.day);
+    if (!(d >= 1 && d <= 28)) return toast("error", "1~28 사이로 입력하세요");
+    DB.settings = await api("PUT", "/api/settings", { cycleStartDay: d });
+    ledgerMonth = null;
+    renderLedger();
+    toast("success", `기준일이 매월 ${d}일로 설정되었습니다`);
+}
+
 async function renderLedger() {
+    if (!ledgerMonth) ledgerMonth = currentAnchor(cycleDay());
+    const period = cyclePeriod(ledgerMonth, cycleDay());
+    window._ledgerPeriod = period;
     [window._ledgerAll, window._ledgerRec] = await Promise.all([
-        api("GET", `/api/transactions?month=${ledgerMonth}`),
+        api("GET", `/api/transactions?from=${period.start}&to=${period.end}`),
         api("GET", `/api/monthly/${ledgerMonth}`),
     ]);
     drawLedger();
@@ -566,7 +617,8 @@ function drawLedger() {
             const approved = approvedByCard[c.id] || 0;
             const cum = cs[c.id]?.cumulative;
             const up = cs[c.id]?.upcoming;
-            const cumThisMonth = cum && String(cum.at).startsWith(ledgerMonth);
+            const p = window._ledgerPeriod;
+            const cumThisMonth = cum && String(cum.at) >= p.start && String(cum.at) <= p.end + " 99:99";
             const diff = approved && cumThisMonth && cum.amount !== approved ? cum.amount - approved : 0;
             return `<tr class="border-b border-slate-100">
                 <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">💳 ${c.company}${c.alias ? ` <span class="text-xs font-normal text-slate-400">(${c.alias})</span>` : ""}${c.payDay ? `<span class="block text-[10px] text-slate-400">📅 매월 ${c.payDay}일</span>` : ""}</td>
@@ -621,16 +673,23 @@ function drawLedger() {
             </div>`;
               })
               .join("")
-        : `<p class="text-center text-slate-400 py-8">${ledgerFilter ? `${ledgerFilter} 거래가 없습니다.` : `${ledgerMonth} 거래 내역이 없습니다.`}</p>`;
+        : `<p class="text-center text-slate-400 py-8">${ledgerFilter ? `${ledgerFilter} 거래가 없습니다.` : `이 기간의 거래 내역이 없습니다.`}</p>`;
 
+    const period = window._ledgerPeriod;
+    const periodLabel = `${period.start.replace(/-/g, ".")} ~ ${period.end.replace(/-/g, ".")}`;
     document.getElementById("tab-ledger").innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
             <h2 class="text-lg font-bold text-slate-700">잔액·거래</h2>
-            <input type="month" id="ledgerMonthPicker" value="${ledgerMonth}" class="border border-slate-300 rounded-lg px-3 py-1.5" />
+            <div class="flex items-center gap-1.5">
+                <button onclick="moveLedger(-1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">◀</button>
+                <span class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${periodLabel}</span>
+                <button onclick="moveLedger(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
+                <button onclick="setCycleDay()" title="기준일 설정 (현재 매월 ${cycleDay()}일 시작)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">⚙</button>
+            </div>
         </div>
         <div class="grid gap-4">
             ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 안 빠져나간 ${ledgerMonth} 카드값+카드외지출 + 이체 설정의 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 이번 기간에 안 빠져나간 카드값+카드외지출 + 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
@@ -655,7 +714,7 @@ function drawLedger() {
                 </table>
             </div>`)}
             ${DB.cards.length ? card(`
-            <h3 class="font-bold text-slate-700 mb-3">카드 사용 현황 <span class="text-xs font-normal text-slate-400">(승인 합계 = ${ledgerMonth} 승인 문자 합산 · 누적/결제 예정 = 카드사 문자 수집)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">카드 사용 현황 <span class="text-xs font-normal text-slate-400">(승인 합계 = 기간 내 승인 문자 합산 · 누적/결제 예정 = 카드사 문자 수집)</span></h3>
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
@@ -671,7 +730,7 @@ function drawLedger() {
                 </table>
             </div>`) : ""}
             ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">${ledgerMonth} 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
+            <h3 class="font-bold text-slate-700 mb-3">기간 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
             <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">${tiles}${netTile}</div>`)}
             ${card(`
             <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
@@ -682,11 +741,6 @@ function drawLedger() {
             </div>
             ${txRows}`)}
         </div>`;
-
-    document.getElementById("ledgerMonthPicker").addEventListener("change", (e) => {
-        ledgerMonth = e.target.value;
-        renderLedger();
-    });
 }
 
 async function showTxRaw(i) {

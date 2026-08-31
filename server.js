@@ -14,7 +14,7 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {} };
+const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {}, settings: {} };
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
@@ -83,6 +83,13 @@ const fileStore = {
         if (!fs.existsSync(TRANSACTIONS_PATH)) return [];
         const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
         return (month ? all.filter((t) => String(t.at || "").startsWith(month)) : all).sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    },
+    async listTransactionsRange(from, to) {
+        if (!fs.existsSync(TRANSACTIONS_PATH)) return [];
+        const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
+        return all
+            .filter((t) => String(t.at || "") >= from && String(t.at || "") <= to + " 99:99")
+            .sort((a, b) => String(b.at).localeCompare(String(a.at)));
     },
     async addTransaction(tx) {
         ensureDir(DATA_DIR);
@@ -153,6 +160,10 @@ const createPgStore = () => {
         },
         async listTransactions(month) {
             const { rows } = await q("SELECT data FROM transactions WHERE $1 = '' OR data->>'at' LIKE $1 || '%' ORDER BY data->>'at' DESC", [month || ""]);
+            return rows.map((r) => r.data);
+        },
+        async listTransactionsRange(from, to) {
+            const { rows } = await q("SELECT data FROM transactions WHERE data->>'at' >= $1 AND data->>'at' <= $2 ORDER BY data->>'at' DESC", [from, to + " 99:99"]);
             return rows.map((r) => r.data);
         },
         async addTransaction(tx) {
@@ -470,10 +481,22 @@ const handleApi = async (req, res, parts) => {
 
     if (collection === "data" && method === "GET") return send(res, 200, await store.readDB());
 
+    if (collection === "settings" && method === "PUT") {
+        const body = await readBody(req);
+        const db = await store.readDB();
+        db.settings = db.settings || {};
+        const d = Number(body.cycleStartDay);
+        if (d >= 1 && d <= 28) db.settings.cycleStartDay = d;
+        await store.writeDB(db);
+        return send(res, 200, db.settings);
+    }
+
     if (collection === "transactions") {
         if (method === "GET") {
-            const month = new URL(req.url, "http://localhost").searchParams.get("month") || "";
-            return send(res, 200, await store.listTransactions(month));
+            const p = new URL(req.url, "http://localhost").searchParams;
+            const from = p.get("from"), to = p.get("to");
+            if (from && to) return send(res, 200, await store.listTransactionsRange(from, to));
+            return send(res, 200, await store.listTransactions(p.get("month") || ""));
         }
         if (method === "DELETE" && id) {
             await store.deleteTransaction(id);
