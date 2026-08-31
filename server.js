@@ -18,7 +18,7 @@ const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances:
 const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
-    cards: ["company", "alias", "cardLast4", "bankId"],
+    cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
@@ -212,7 +212,13 @@ const normalize = (collection, body) => {
                 .map((t) => ({ bankId: String(t?.bankId || ""), amount: Number(t?.amount) || 0 }))
                 .filter((t) => t.bankId && t.amount > 0);
     }
-    if (collection === "cards" && data.cardLast4 != null) data.cardLast4 = String(data.cardLast4).replace(/\D/g, "").slice(-4);
+    if (collection === "cards") {
+        if (data.cardLast4 != null) data.cardLast4 = String(data.cardLast4).replace(/\D/g, "").slice(-4);
+        if ("payDay" in data) {
+            const d = Number(data.payDay) || 0;
+            data.payDay = d >= 1 && d <= 31 ? d : null;
+        }
+    }
     if (collection === "fixedExpenses" && data.amount != null) data.amount = Number(data.amount) || 0;
     return data;
 };

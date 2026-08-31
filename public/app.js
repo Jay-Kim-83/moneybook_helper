@@ -292,6 +292,7 @@ function renderCards() {
                     <p class="font-bold text-slate-800">${c.company}${c.alias ? ` <span class="text-sm font-normal text-slate-400">(${c.alias})</span>` : ""}</p>
                     <p class="text-sm text-slate-500 mt-1">카드 끝 4자리: ${last4(c.cardLast4)}</p>
                     <span class="inline-block mt-2 text-xs bg-indigo-50 text-indigo-700 px-2 py-1 rounded">🏦 ${bankName(c.bankId)}</span>
+                    ${c.payDay ? `<span class="inline-block mt-2 ml-1 text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded">📅 매월 ${c.payDay}일 결제</span>` : ""}
                 </div>
                 <div class="flex gap-2 shrink-0">
                     <button onclick="editCard('${c.id}')" class="text-indigo-600 hover:underline text-sm">수정</button>
@@ -310,6 +311,7 @@ const cardFields = () => [
     { name: "alias", label: "카드 별칭 (예: 주유 카드)" },
     { name: "cardLast4", label: "카드 끝 4자리" },
     { name: "bankId", label: "연결 은행", type: "select", options: bankOptions() },
+    { name: "payDay", label: "결제일 (매월 며칠, 휴일이면 다음 영업일 출금)", type: "number" },
 ];
 
 const requireBank = async () => {
@@ -526,7 +528,7 @@ function drawLedger() {
             const cumThisMonth = cum && String(cum.at).startsWith(ledgerMonth);
             const diff = approved && cumThisMonth && cum.amount !== approved ? cum.amount - approved : 0;
             return `<tr class="border-b border-slate-100">
-                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">💳 ${c.company}${c.alias ? ` <span class="text-xs font-normal text-slate-400">(${c.alias})</span>` : ""}</td>
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">💳 ${c.company}${c.alias ? ` <span class="text-xs font-normal text-slate-400">(${c.alias})</span>` : ""}${c.payDay ? `<span class="block text-[10px] text-slate-400">📅 매월 ${c.payDay}일</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${approved ? "text-purple-600" : "text-slate-300"}">${approved ? won(approved) : "—"}</td>
                 <td class="py-2 px-2 text-right tabular-nums ${cum ? "text-slate-700" : "text-slate-300"}">${cum ? won(cum.amount) : "—"}${cum ? `<span class="block text-[10px] text-slate-400">📩 ${cum.at.slice(5)}</span>` : ""}${diff ? `<span class="block text-[10px] text-amber-600">⚠ 승인 합계와 ${won(Math.abs(diff))} 차이</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${up ? "text-red-500" : "text-slate-300"}">${up ? won(up.amount) : "—"}${up ? `<span class="block text-[10px] text-slate-400">📩 ${up.at.slice(5)}</span>` : ""}</td>
@@ -706,7 +708,8 @@ async function renderMonthly() {
         ? DB.cards
               .map((c) => {
                   const prev = previous?.payments?.[c.id];
-                  const auto = current.payments?.[c.id] == null ? DB.cardStats?.[c.id]?.upcoming : null;
+                  const up = DB.cardStats?.[c.id]?.upcoming;
+                  const auto = current.payments?.[c.id] == null && up && String(up.at).startsWith(selectedMonth) ? up : null;
                   const curVal = current.payments?.[c.id] ?? auto?.amount ?? "";
                   return `<div class="py-2 border-b border-slate-100 last:border-0">
             <div class="flex items-center justify-between gap-3">
