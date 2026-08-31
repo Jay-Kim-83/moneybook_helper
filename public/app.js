@@ -1208,13 +1208,13 @@ function renderHistoryChart(records, actByMonth = {}) {
         borderRadius: 3,
     }));
     const expBar = { type: "bar", label: "카드 외 지출", stack: "지출", data: records.map((r) => sumExpenses(r.expenses)), backgroundColor: "#94a3b8", borderRadius: 3 };
-    const balLine = { type: "line", label: "총 잔액", stack: "_bal", data: records.map((r) => sumValues(r.balances)), borderColor: "#0f172a", borderWidth: 2, tension: 0.3, pointRadius: 3 };
+    const balLine = { type: "line", label: "총 잔액 (우측 축)", yAxisID: "y2", data: records.map((r) => sumValues(r.balances)), borderColor: "#0f172a", borderWidth: 2, tension: 0.3, pointRadius: 3 };
     const remainLine = {
         type: "line",
-        label: "예상 잔액",
-        stack: "_remain",
+        label: "예상 잔액 (우측 축)",
+        yAxisID: "y2",
         data: records.map((r) => sumValues(r.balances) - sumValues(r.payments) - sumExpenses(r.expenses)),
-        borderColor: "#16a34a",
+        borderColor: "#64748b",
         borderWidth: 2,
         borderDash: [5, 4],
         tension: 0.3,
@@ -1226,9 +1226,10 @@ function renderHistoryChart(records, actByMonth = {}) {
         stack: "_actOut",
         data: records.map((r) => actByMonth[r.month]?.out || 0),
         borderColor: "#dc2626",
-        borderWidth: 2,
+        borderWidth: 2.5,
         tension: 0.3,
-        pointRadius: 3,
+        pointRadius: 4,
+        pointBackgroundColor: "#dc2626",
     };
     const actInLine = {
         type: "line",
@@ -1236,9 +1237,10 @@ function renderHistoryChart(records, actByMonth = {}) {
         stack: "_actIn",
         data: records.map((r) => actByMonth[r.month]?.in || 0),
         borderColor: "#16a34a",
-        borderWidth: 2,
+        borderWidth: 2.5,
         tension: 0.3,
-        pointRadius: 3,
+        pointRadius: 4,
+        pointBackgroundColor: "#16a34a",
     };
     historyChart = new Chart(ctx, {
         data: { labels: records.map((r) => r.month), datasets: [...cardBars, expBar, balLine, remainLine, actOutLine, actInLine] },
@@ -1252,7 +1254,19 @@ function renderHistoryChart(records, actByMonth = {}) {
             },
             scales: {
                 x: { stacked: true },
-                y: { stacked: true, beginAtZero: true, ticks: { callback: (v) => `${Math.round(v / 10000)}만` } },
+                y: {
+                    stacked: true,
+                    beginAtZero: true,
+                    position: "left",
+                    title: { display: true, text: "지출·거래", font: { family: "Noto Sans KR", size: 11 } },
+                    ticks: { callback: (v) => `${Math.round(v / 10000)}만` },
+                },
+                y2: {
+                    position: "right",
+                    grid: { drawOnChartArea: false },
+                    title: { display: true, text: "잔액", font: { family: "Noto Sans KR", size: 11 } },
+                    ticks: { callback: (v) => `${Math.round(v / 10000)}만` },
+                },
             },
         },
     });
