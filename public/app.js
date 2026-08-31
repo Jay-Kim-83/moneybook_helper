@@ -117,7 +117,7 @@ const sectionHeader = (title, btnLabel, onClick, resetFn = "") =>
     `<div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-bold text-slate-700">${title}</h2>
         <div class="flex items-center gap-3">
-            ${resetFn ? `<button onclick="${resetFn}" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑 초기화</button>` : ""}
+            ${resetFn ? `<button onclick="${resetFn}" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑️ 초기화</button>` : ""}
             <button onclick="${onClick}" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">${btnLabel}</button>
         </div>
     </div>`;
@@ -808,7 +808,7 @@ function drawLedger() {
                 <span class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${periodLabel}</span>
                 <button onclick="moveLedger(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
                 <button onclick="setCycleDay()" title="기준일 설정 (현재 매월 ${cycleDay()}일 시작)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">⚙</button>
-                <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑</button>
+                <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑️</button>
             </div>
         </div>
         <div class="grid gap-4">
@@ -960,7 +960,7 @@ async function renderMonthly() {
                 <button onclick="moveMonthly(-1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">◀</button>
                 <span title="기록 키: ${selectedMonth}" class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${mPeriod.start.replace(/-/g, ".")} ~ ${mPeriod.end.replace(/-/g, ".")}</span>
                 <button onclick="moveMonthly(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
-                <button onclick="resetMonthly()" title="이 기간 기록 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑</button>
+                <button onclick="resetMonthly()" title="이 기간 기록 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑️</button>
             </div>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
@@ -1514,7 +1514,7 @@ async function renderHistory() {
     document.getElementById("tab-history").innerHTML =
         `<div class="flex items-center justify-between mb-4">
             <h2 class="text-lg font-bold text-slate-700">결제 이력 (기간별 저장)</h2>
-            ${records.length ? `<button onclick="resetHistory()" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑 전체 초기화</button>` : ""}
+            ${records.length ? `<button onclick="resetHistory()" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑️ 전체 초기화</button>` : ""}
         </div>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
     if (records.length) renderHistoryChart([...records].sort((a, b) => a.month.localeCompare(b.month)), actByMonth);
 }
