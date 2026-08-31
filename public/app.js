@@ -1194,7 +1194,7 @@ const cardLabel = (id) => {
     return c ? c.alias || c.company : `삭제된 카드(${id.slice(-4)})`;
 };
 
-function renderHistoryChart(records) {
+function renderHistoryChart(records, actByMonth = {}) {
     const ctx = document.getElementById("historyChart");
     if (!ctx || typeof Chart === "undefined") return;
     if (historyChart) historyChart.destroy();
@@ -1220,8 +1220,28 @@ function renderHistoryChart(records) {
         tension: 0.3,
         pointRadius: 3,
     };
+    const actOutLine = {
+        type: "line",
+        label: "실제 출금",
+        stack: "_actOut",
+        data: records.map((r) => actByMonth[r.month]?.out || 0),
+        borderColor: "#dc2626",
+        borderWidth: 2,
+        tension: 0.3,
+        pointRadius: 3,
+    };
+    const actInLine = {
+        type: "line",
+        label: "실제 입금",
+        stack: "_actIn",
+        data: records.map((r) => actByMonth[r.month]?.in || 0),
+        borderColor: "#16a34a",
+        borderWidth: 2,
+        tension: 0.3,
+        pointRadius: 3,
+    };
     historyChart = new Chart(ctx, {
-        data: { labels: records.map((r) => r.month), datasets: [...cardBars, expBar, balLine, remainLine] },
+        data: { labels: records.map((r) => r.month), datasets: [...cardBars, expBar, balLine, remainLine, actOutLine, actInLine] },
         options: {
             responsive: true,
             maintainAspectRatio: false,
@@ -1255,6 +1275,18 @@ async function renderHistory() {
             return api("GET", `/api/transactions?from=${p.start}&to=${p.end}`).catch(() => []);
         })
     );
+    const actByMonth = {};
+    records.forEach((r, i) => {
+        actByMonth[r.month] = actuals[i].reduce(
+            (a, t) => {
+                if (t.kind === "입금") a.in += t.amount || 0;
+                if (t.kind === "출금") a.out += t.amount || 0;
+                if (t.kind === "카드") a.card += t.amount || 0;
+                return a;
+            },
+            { in: 0, out: 0, card: 0, n: actuals[i].length }
+        );
+    });
     const list = records.length
         ? records
               .map((r, idx) => {
@@ -1264,16 +1296,8 @@ async function renderHistory() {
                   const prev = records[idx + 1];
                   const prevPay = prev ? sumValues(prev.payments) : null;
                   const prevExp = prev ? sumExpenses(prev.expenses) : null;
-                  const act = actuals[idx].reduce(
-                      (a, t) => {
-                          if (t.kind === "입금") a.in += t.amount || 0;
-                          if (t.kind === "출금") a.out += t.amount || 0;
-                          if (t.kind === "카드") a.card += t.amount || 0;
-                          return a;
-                      },
-                      { in: 0, out: 0, card: 0 }
-                  );
-                  const hasAct = actuals[idx].length > 0;
+                  const act = actByMonth[r.month];
+                  const hasAct = act.n > 0;
                   const planSpend = pay + exp;
                   const doneN = r.plan?.filter((x) => r.transfersDone?.[x.key]).length || 0;
                   return card(`
@@ -1299,8 +1323,27 @@ async function renderHistory() {
                 ${histItem("카드 승인", act.card, "text-purple-600")}
                 ${histItem("순변동", act.in - act.out, act.in - act.out >= 0 ? "text-slate-700" : "text-red-600")}
             </div>` : ""}
-            ${r.plan?.length ? `
+            ${(() => {
+                const payEntries = Object.entries(r.payments || {}).filter(([, v]) => Number(v));
+                const expEntries = (r.expenses || []).filter((e) => Number(e.amount));
+                if (!payEntries.length && !expEntries.length) return "";
+                return `
             <details class="mt-3 pt-3 border-t border-slate-100">
+                <summary class="text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-indigo-600">상세 내역 (카드 ${payEntries.length} · 지출 ${expEntries.length}) <span class="font-normal text-slate-400">(펼치기)</span></summary>
+                <div class="mt-1 grid gap-3 sm:grid-cols-2">
+                    <div>
+                        <p class="text-[11px] font-bold text-slate-400 mb-0.5">💳 카드 결제</p>
+                        ${payEntries.map(([id, v]) => `<p class="text-xs text-slate-600 py-0.5 flex justify-between gap-2"><span>${cardLabel(id)}</span><span class="tabular-nums">${won(v)}</span></p>`).join("") || '<p class="text-xs text-slate-400">없음</p>'}
+                    </div>
+                    <div>
+                        <p class="text-[11px] font-bold text-slate-400 mb-0.5">🧾 카드 외 지출</p>
+                        ${expEntries.map((e) => `<div class="py-0.5"><p class="text-xs text-slate-600 flex justify-between gap-2"><span>${e.name} <span class="text-slate-400">(${bankName(e.bankId)})</span></span><span class="tabular-nums">${won(e.amount)}</span></p>${e.memo ? `<p class="text-[10px] text-sky-600">📝 ${e.memo}</p>` : ""}</div>`).join("") || '<p class="text-xs text-slate-400">없음</p>'}
+                    </div>
+                </div>
+            </details>`;
+            })()}
+            ${r.plan?.length ? `
+            <details class="mt-2">
                 <summary class="text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-indigo-600">이체 플랜 ${doneN}/${r.plan.length} 완료 ${doneN === r.plan.length ? "✅" : ""} <span class="font-normal text-slate-400">(펼치기)</span></summary>
                 <div class="mt-1">
                 ${r.plan
@@ -1328,7 +1371,7 @@ async function renderHistory() {
         : "";
     document.getElementById("tab-history").innerHTML =
         `<h2 class="text-lg font-bold text-slate-700 mb-4">결제 이력 (월별 저장)</h2>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
-    if (records.length) renderHistoryChart([...records].sort((a, b) => a.month.localeCompare(b.month)));
+    if (records.length) renderHistoryChart([...records].sort((a, b) => a.month.localeCompare(b.month)), actByMonth);
 }
 
 function viewMonth(month) {
