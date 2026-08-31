@@ -650,6 +650,12 @@ function renderOverview() {
 
 let ledgerMonth = null;
 let ledgerFilter = null;
+let ledgerBankFilter = null;
+
+const setLedgerBankFilter = (id) => {
+    ledgerBankFilter = ledgerBankFilter === id ? null : id;
+    drawLedger();
+};
 
 const cycleDay = () => Number(DB.settings?.cycleStartDay) || 25;
 
@@ -817,12 +823,12 @@ function drawLedger() {
                     (paid ? `<p class="text-[10px] text-green-400 mt-1">✓ 취소선 = 이미 출금 확인되어 차감된 항목</p>` : "");
             }
 
-            return `<tr class="border-b border-slate-100">
-                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">🏦 ${b.name}</td>
+            return `<tr class="border-b border-slate-100 ${ledgerBankFilter === b.id ? "bg-indigo-50" : ""}">
+                <td onclick="setLedgerBankFilter('${b.id}')" title="클릭하면 이 은행의 거래만 표시" class="py-2 px-2 font-medium whitespace-nowrap cursor-pointer hover:text-indigo-600 ${ledgerBankFilter === b.id ? "text-indigo-700" : "text-slate-700"}">🏦 ${b.name}${ledgerBankFilter === b.id ? ' <span class="text-[10px]">▼ 필터 중</span>' : ""}</td>
                 <td onclick="editBalance('${b.id}')" title="클릭해서 잔액 직접 입력" class="py-2 px-2 text-right tabular-nums font-bold cursor-pointer hover:bg-slate-50 ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "✏️ 입력"}</td>
                 <td ${window._needTips[b.id] ? `onmouseenter="showNeedTip(this, '${b.id}')" onmouseleave="hideNeedTip()" onclick="showNeedTip(this, '${b.id}')"` : ""} class="py-2 px-2 text-right tabular-nums ${window._needTips[b.id] ? "cursor-help" : ""} ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
-                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? (c.manual ? "✏️ " : "📩 ") + c.at.slice(5) : "수집 전"}</td>
+                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? (c.manual ? "✏️ " : c.est ? "≈ " : "📩 ") + c.at.slice(5) : "수집 전"}</td>
             </tr>`;
         })
         .join("");
@@ -878,7 +884,8 @@ function drawLedger() {
     </div>`;
 
     const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 미분류: "bg-amber-50 text-amber-700" };
-    const shown = ledgerFilter ? txs.filter((t) => (t.kind || "미분류") === ledgerFilter) : txs;
+    const bankFiltered = ledgerBankFilter ? txs.filter((t) => t.bankId === ledgerBankFilter) : txs;
+    const shown = ledgerFilter ? bankFiltered.filter((t) => (t.kind || "미분류") === ledgerFilter) : bankFiltered;
     window._ledgerTx = shown;
     const txRows = shown.length
         ? shown
@@ -959,9 +966,12 @@ function drawLedger() {
             ${card(`
             <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <h3 class="font-bold text-slate-700">거래 내역
-                    <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>
+                    <span class="text-xs font-normal text-slate-400">(${ledgerFilter || ledgerBankFilter ? `${[ledgerBankFilter ? bankName(ledgerBankFilter) : "", ledgerFilter || ""].filter(Boolean).join(" · ")} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>
                 </h3>
-                ${ledgerFilter ? `<button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button>` : ""}
+                <div class="flex gap-1.5 flex-wrap">
+                    ${ledgerBankFilter ? `<button onclick="setLedgerBankFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${bankName(ledgerBankFilter)} 해제</button>` : ""}
+                    ${ledgerFilter ? `<button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 해제</button>` : ""}
+                </div>
             </div>
             ${txRows}`)}
         </div>`;

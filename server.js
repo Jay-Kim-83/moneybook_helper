@@ -456,6 +456,12 @@ const handleIngest = async (req, res) => {
             db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
             dirty = true;
         }
+    } else if (tx.bankId && tx.balance == null && tx.status === "ok" && tx.amount != null && ["입금", "출금", "이체"].includes(tx.kind)) {
+        const cur = db.currentBalances?.[tx.bankId];
+        if (cur && String(tx.at) >= String(cur.at)) {
+            db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.kind === "입금" ? tx.amount : -tx.amount), at: tx.at, est: true };
+            dirty = true;
+        }
     }
     if (tx.cardId && tx.status === "ok") {
         db.cardStats = db.cardStats || {};
