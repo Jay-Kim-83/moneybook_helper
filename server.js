@@ -102,6 +102,10 @@ const fileStore = {
         const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
         fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all.filter((t) => t.id !== id), null, 4));
     },
+    async clearTransactions() {
+        ensureDir(DATA_DIR);
+        fs.writeFileSync(TRANSACTIONS_PATH, "[]");
+    },
 };
 
 const createPgStore = () => {
@@ -171,6 +175,9 @@ const createPgStore = () => {
         },
         async deleteTransaction(id) {
             await q("DELETE FROM transactions WHERE id = $1", [id]);
+        },
+        async clearTransactions() {
+            await q("DELETE FROM transactions");
         },
     };
 };
@@ -499,9 +506,17 @@ const handleApi = async (req, res, parts) => {
             if (from && to) return send(res, 200, await store.listTransactionsRange(from, to));
             return send(res, 200, await store.listTransactions(p.get("month") || ""));
         }
-        if (method === "DELETE" && id) {
-            await store.deleteTransaction(id);
-            return send(res, 200, { ok: true });
+        if (method === "DELETE") {
+            if (id) {
+                await store.deleteTransaction(id);
+                return send(res, 200, { ok: true });
+            }
+            await store.clearTransactions();
+            const db = await store.readDB();
+            db.currentBalances = {};
+            db.cardStats = {};
+            await store.writeDB(db);
+            return send(res, 200, { ok: true, cleared: true });
         }
     }
 

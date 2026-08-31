@@ -113,11 +113,110 @@ const bankOptions = () => DB.banks.map((b) => ({ value: b.id, label: b.name }));
 
 const card = (inner) => `<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">${inner}</div>`;
 
-const sectionHeader = (title, btnLabel, onClick) =>
+const sectionHeader = (title, btnLabel, onClick, resetFn = "") =>
     `<div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-bold text-slate-700">${title}</h2>
-        <button onclick="${onClick}" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">${btnLabel}</button>
+        <div class="flex items-center gap-3">
+            ${resetFn ? `<button onclick="${resetFn}" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑 초기화</button>` : ""}
+            <button onclick="${onClick}" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">${btnLabel}</button>
+        </div>
     </div>`;
+
+async function confirmReset(title, lines) {
+    const { value } = await Swal.fire({
+        title,
+        html: `<div class="text-left text-sm text-slate-600">
+            ${lines.map((l) => `<p class="py-0.5">• ${l}</p>`).join("")}
+            <p class="mt-3 text-red-600 font-bold">이 작업은 되돌릴 수 없습니다.<br>계속하려면 아래에 <u>초기화</u>를 입력하세요.</p>
+        </div>`,
+        input: "text",
+        inputPlaceholder: "초기화",
+        showCancelButton: true,
+        confirmButtonText: "초기화 실행",
+        cancelButtonText: "취소",
+        confirmButtonColor: "#dc2626",
+    });
+    if (value === undefined) return false;
+    if (value !== "초기화") {
+        if (value !== "") toast("error", "'초기화'를 정확히 입력해야 실행됩니다");
+        return false;
+    }
+    return true;
+}
+
+async function resetBanks() {
+    if (!(await confirmReset("은행 데이터 초기화", [
+        `등록된 은행 ${DB.banks.length}개가 모두 삭제됩니다.`,
+        "은행에 연결된 카드·고정 지출도 함께 삭제됩니다.",
+        "이체 설정(순서·남길 금액·고정 이체)도 사라집니다.",
+        "저장된 월별 기록·거래 내역은 남지만 은행명이 '미지정'으로 표시됩니다.",
+    ]))) return;
+    for (const b of [...DB.banks]) await api("DELETE", `/api/banks/${b.id}`);
+    await reload();
+    toast("success", "은행 데이터가 초기화되었습니다");
+}
+
+async function resetCards() {
+    if (!(await confirmReset("카드 데이터 초기화", [
+        `등록된 카드 ${DB.cards.length}개가 모두 삭제됩니다.`,
+        "카드 결제 입력·카드 사용 현황에서 해당 카드가 사라집니다.",
+        "저장된 월별 기록의 카드 결제액은 남지만 '삭제된 카드'로 표시됩니다.",
+    ]))) return;
+    for (const c of [...DB.cards]) await api("DELETE", `/api/cards/${c.id}`);
+    await reload();
+    toast("success", "카드 데이터가 초기화되었습니다");
+}
+
+async function resetFixed() {
+    if (!(await confirmReset("고정 지출 초기화", [
+        `등록된 고정 지출 ${DB.fixedExpenses.length}개가 모두 삭제됩니다.`,
+        "다음 기간부터 카드 외 지출 자동 등록이 되지 않습니다.",
+        "이미 저장된 월별 기록의 지출 내역은 그대로 유지됩니다.",
+    ]))) return;
+    for (const e of [...DB.fixedExpenses]) await api("DELETE", `/api/fixedExpenses/${e.id}`);
+    await reload();
+    toast("success", "고정 지출이 초기화되었습니다");
+}
+
+async function resetLedger() {
+    if (!(await confirmReset("거래·수집 데이터 초기화", [
+        "문자로 수집된 거래 내역 전체가 삭제됩니다 (모든 기간).",
+        "은행별 현재 잔액(수집·직접 입력)이 모두 지워집니다.",
+        "카드사 누적·결제 예정 수집값도 초기화됩니다.",
+        "월별 결제 기록(이번달 결제·이력)과 은행·카드 정보는 유지됩니다.",
+        "이후 새 문자가 오면 다시 수집됩니다.",
+    ]))) return;
+    await api("DELETE", "/api/transactions");
+    await reload();
+    renderLedger();
+    toast("success", "거래·수집 데이터가 초기화되었습니다");
+}
+
+async function resetMonthly() {
+    const p = cyclePeriod(selectedMonth, cycleDay());
+    if (!(await confirmReset("이 기간 기록 초기화", [
+        `${p.start.replace(/-/g, ".")} ~ ${p.end.replace(/-/g, ".")} (${selectedMonth}) 기록이 삭제됩니다.`,
+        "입력한 은행 잔액·카드 결제·카드 외 지출이 지워집니다.",
+        "이체 플랜 체크 상태와 이체 로그도 함께 삭제됩니다.",
+        "수집된 거래 내역과 다른 기간 기록은 유지됩니다.",
+    ]))) return;
+    await api("DELETE", `/api/monthly/${selectedMonth}`);
+    renderMonthly();
+    toast("success", "이 기간 기록이 초기화되었습니다");
+}
+
+async function resetHistory() {
+    const records = await api("GET", "/api/monthly");
+    if (!records.length) return toast("info", "삭제할 기록이 없습니다");
+    if (!(await confirmReset("결제 이력 전체 초기화", [
+        `저장된 기간 기록 ${records.length}개가 모두 삭제됩니다.`,
+        "각 기록의 잔액·카드 결제·지출·이체 플랜·로그가 지워집니다.",
+        "수집된 거래 내역과 은행·카드 정보는 유지됩니다.",
+    ]))) return;
+    for (const r of records) await api("DELETE", `/api/monthly/${r.month}`);
+    renderHistory();
+    toast("success", "결제 이력이 초기화되었습니다");
+}
 
 const emptyState = (msg) => `<p class="text-center text-slate-400 py-10">${msg}</p>`;
 
@@ -174,7 +273,7 @@ function renderBanks() {
               .join("")
         : emptyState("등록된 은행이 없습니다. 은행을 추가해 주세요.");
     document.getElementById("tab-banks").innerHTML =
-        sectionHeader("나의 은행", "+ 은행 추가", "saveBank()") +
+        sectionHeader("나의 은행", "+ 은행 추가", "saveBank()", DB.banks.length ? "resetBanks()" : "") +
         `<p class="text-xs text-slate-400 -mt-2 mb-3">카드를 드래그하거나 ▲▼로 순서를 바꾸면 이체 릴레이·이번달 결제 순서가 함께 바뀝니다.</p>
         <div class="grid gap-3 md:grid-cols-2">${list}</div>`;
 }
@@ -324,7 +423,7 @@ function renderCards() {
               .join("")
         : emptyState("등록된 카드가 없습니다.");
     document.getElementById("tab-cards").innerHTML =
-        sectionHeader("나의 카드", "+ 카드 추가", "saveCard()") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
+        sectionHeader("나의 카드", "+ 카드 추가", "saveCard()", DB.cards.length ? "resetCards()" : "") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
 }
 
 const cardFields = () => [
@@ -387,7 +486,7 @@ function renderFixed() {
               .join("")
         : emptyState("등록된 고정 지출이 없습니다.");
     document.getElementById("tab-fixed").innerHTML =
-        sectionHeader("카드 외 고정 지출", "+ 지출 추가", "saveFixed()") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
+        sectionHeader("카드 외 고정 지출", "+ 지출 추가", "saveFixed()", DB.fixedExpenses.length ? "resetFixed()" : "") + `<div class="grid gap-3 md:grid-cols-2">${list}</div>`;
 }
 
 const fixedFields = () => [
@@ -709,6 +808,7 @@ function drawLedger() {
                 <span class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${periodLabel}</span>
                 <button onclick="moveLedger(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
                 <button onclick="setCycleDay()" title="기준일 설정 (현재 매월 ${cycleDay()}일 시작)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">⚙</button>
+                <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑</button>
             </div>
         </div>
         <div class="grid gap-4">
@@ -860,6 +960,7 @@ async function renderMonthly() {
                 <button onclick="moveMonthly(-1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">◀</button>
                 <span title="기록 키: ${selectedMonth}" class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${mPeriod.start.replace(/-/g, ".")} ~ ${mPeriod.end.replace(/-/g, ".")}</span>
                 <button onclick="moveMonthly(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
+                <button onclick="resetMonthly()" title="이 기간 기록 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑</button>
             </div>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
@@ -1411,7 +1512,10 @@ async function renderHistory() {
         </div><div class="relative h-80"><canvas id="historyChart"></canvas></div>`)
         : "";
     document.getElementById("tab-history").innerHTML =
-        `<h2 class="text-lg font-bold text-slate-700 mb-4">결제 이력 (월별 저장)</h2>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
+        `<div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold text-slate-700">결제 이력 (기간별 저장)</h2>
+            ${records.length ? `<button onclick="resetHistory()" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑 전체 초기화</button>` : ""}
+        </div>${chart}<div class="grid gap-4 mt-4">${list}</div>`;
     if (records.length) renderHistoryChart([...records].sort((a, b) => a.month.localeCompare(b.month)), actByMonth);
 }
 
