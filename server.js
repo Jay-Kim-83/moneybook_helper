@@ -445,15 +445,30 @@ const handleIngest = async (req, res) => {
     const parsed = parseSms(sender, text, db);
     if (!parsed) return send(res, 200, { ok: true, dropped: true });
     const tx = { id: genId(), sender, raw: text.trim(), category: "", ...parsed };
+    let dedupForce = false;
+    if (tx.status === "ok" && tx.bankId && tx.amount != null && (tx.kind === "입금" || tx.kind === "출금")) {
+        const shift = (min) => {
+            const d = new Date(tx.at.replace(" ", "T") + ":00Z");
+            d.setUTCMinutes(d.getUTCMinutes() + min);
+            return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
+        };
+        const recent = await store.listTransactionsRange(shift(-3), shift(3));
+        const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
+        if (dup) {
+            if (tx.balance == null) return send(res, 200, { ok: true, dedup: true });
+            await store.deleteTransaction(dup.id);
+            dedupForce = true;
+        }
+    }
     await store.addTransaction(tx);
     let dirty = false;
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
         const cur = db.currentBalances[tx.bankId];
         const chained = cur && tx.balance === cur.amount + (tx.kind === "입금" ? tx.amount : -(tx.amount || 0));
-        const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && chained);
+        const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && (chained || cur.est)) || (dedupForce && cur.est);
         if (newer) {
-            db.currentBalances[tx.bankId] = { amount: tx.balance, at: tx.at };
+            db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur && String(cur.at) > String(tx.at) ? cur.at : tx.at };
             dirty = true;
         }
     } else if (tx.bankId && tx.balance == null && tx.status === "ok" && tx.amount != null && ["입금", "출금", "이체"].includes(tx.kind)) {
