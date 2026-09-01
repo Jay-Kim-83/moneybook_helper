@@ -762,6 +762,26 @@ const setLedgerFilter = (k) => {
     drawLedger();
 };
 
+const ledgerOpen = (k) => {
+    try {
+        return localStorage.getItem("ledgerSect_" + k) !== "0";
+    } catch {
+        return true;
+    }
+};
+const ledgerToggle = (k, open) => {
+    try {
+        localStorage.setItem("ledgerSect_" + k, open ? "1" : "0");
+    } catch {}
+};
+const collapsible = (key, titleHtml, bodyHtml) =>
+    card(`<details ${ledgerOpen(key) ? "open" : ""} ontoggle="ledgerToggle('${key}', this.open)">
+        <summary class="cursor-pointer select-none">
+            <h3 class="font-bold text-slate-700 inline">${titleHtml}</h3>
+        </summary>
+        <div class="mt-3">${bodyHtml}</div>
+    </details>`);
+
 function showNeedTip(el, bankId) {
     hideNeedTip();
     const html = window._needTips?.[bankId];
@@ -959,8 +979,7 @@ function drawLedger() {
             </div>
         </div>
         <div class="grid gap-4">
-            ${card(`
-            <h3 class="font-bold text-slate-700 mb-3">은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 이번 기간에 안 빠져나간 카드값+카드외지출 + 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span></h3>
+            ${collapsible("bal", `은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 이번 기간에 안 빠져나간 카드값+카드외지출 + 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span>`, `
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
@@ -984,8 +1003,7 @@ function drawLedger() {
                     </tfoot>
                 </table>
             </div>`)}
-            ${DB.cards.length ? card(`
-            <h3 class="font-bold text-slate-700 mb-3">카드 사용 현황 <span class="text-xs font-normal text-slate-400">(승인 합계 = 기간 내 승인 문자 합산 · 누적/결제 예정 = 카드사 문자 수집)</span></h3>
+            ${DB.cards.length ? collapsible("cards", `카드 사용 현황 <span class="text-xs font-normal text-slate-400">(승인 합계 = 기간 내 승인 문자 합산 · 누적/결제 예정 = 카드사 문자 수집)</span>`, `
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
                     <thead>
@@ -1003,13 +1021,8 @@ function drawLedger() {
             ${card(`
             <h3 class="font-bold text-slate-700 mb-3">기간 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
             <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">${tiles}${netTile}</div>`)}
-            ${card(`
-            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-                <h3 class="font-bold text-slate-700">거래 내역
-                    <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>
-                </h3>
-                ${ledgerFilter ? `<button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button>` : ""}
-            </div>
+            ${collapsible("tx", `거래 내역 <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>`, `
+            ${ledgerFilter ? `<div class="mb-2 text-right"><button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button></div>` : ""}
             ${txRows}`)}
         </div>`;
 }
