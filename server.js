@@ -322,7 +322,7 @@ const deploy = async (message) => {
     return { ok: push.ok, log };
 };
 
-const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권/;
+const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권|브리핑/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 const kstNow = () => {
