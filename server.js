@@ -452,21 +452,27 @@ const handleIngest = async (req, res) => {
     if (!parsed) return send(res, 200, { ok: true, dropped: true });
     const tx = { id: genId(), sender, raw: text.trim(), category: "", ...parsed };
     let dedupForce = false;
-    if (tx.status === "ok" && tx.bankId && tx.amount != null && (tx.kind === "입금" || tx.kind === "출금")) {
+    let skipStore = false;
+    if (tx.status === "ok" && tx.amount != null && ["입금", "출금", "카드"].includes(tx.kind)) {
         const shift = (min) => {
             const d = new Date(tx.at.replace(" ", "T") + ":00Z");
             d.setUTCMinutes(d.getUTCMinutes() + min);
             return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
         };
         const recent = await store.listTransactionsRange(shift(-3), shift(3));
-        const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
-        if (dup) {
-            if (tx.balance == null) return send(res, 200, { ok: true, dedup: true });
-            await store.deleteTransaction(dup.id);
-            dedupForce = true;
+        if (tx.kind === "카드") {
+            const dup = recent.find((o) => o.kind === "카드" && o.amount === tx.amount && (o.cardId === tx.cardId || o.bankId === tx.bankId));
+            if (dup) skipStore = true;
+        } else if (tx.bankId) {
+            const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
+            if (dup) {
+                if (tx.balance == null) return send(res, 200, { ok: true, dedup: true });
+                await store.deleteTransaction(dup.id);
+                dedupForce = true;
+            }
         }
     }
-    await store.addTransaction(tx);
+    if (!skipStore) await store.addTransaction(tx);
     let dirty = false;
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
@@ -497,7 +503,7 @@ const handleIngest = async (req, res) => {
         }
     }
     if (dirty) await store.writeDB(db);
-    send(res, 200, { ok: true, alert: tx.status === "pending" && /(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(tx.raw), transaction: tx });
+    send(res, 200, { ok: true, ...(skipStore ? { dedup: true } : {}), alert: !skipStore && tx.status === "pending" && /(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(tx.raw), transaction: tx });
 };
 
 const handleAuth = async (req, res, action) => {
