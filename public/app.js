@@ -664,18 +664,18 @@ function bankTxModal(bankId) {
         },
         { in: 0, out: 0, card: 0 }
     );
-    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 미분류: "bg-amber-50 text-amber-700" };
+    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 해외: "bg-teal-50 text-teal-600", 미분류: "bg-amber-50 text-amber-700" };
     const chip = (label, v, cls) => (v ? `<span class="text-xs px-2 py-0.5 rounded-full ${cls}">${label} ${won(v)}</span>` : "");
     const rows = txs.length
         ? txs
               .map((t) => {
-                  const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
+                  const amt = t.kind === "해외" && t.fxAmount != null ? `${t.currency} ${t.fxAmount}` : t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
                   return `<div title="${String(t.raw || "").replace(/"/g, "&quot;").slice(0, 200)}" class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 text-left">
                 <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
                 <span class="flex-1 text-sm text-slate-700 truncate">${t.title}</span>
                 ${t.balance != null ? `<span class="text-[11px] text-sky-500 shrink-0">잔액 ${won(t.balance)}</span>` : ""}
-                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : "text-slate-400"}">${amt}</span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
             </div>`;
               })
               .join("")
@@ -829,6 +829,7 @@ const LEDGER_KINDS = [
     { key: "카드", sign: "−", amtCls: "text-purple-600" },
     { key: "이체", sign: "", amtCls: "text-slate-500" },
     { key: "안내", sign: "", amtCls: "text-sky-600" },
+    { key: "해외", sign: "", amtCls: "text-teal-600" },
     { key: "미분류", sign: "", amtCls: "text-amber-600" },
 ];
 
@@ -934,8 +935,8 @@ function drawLedger() {
         return `<button onclick="setLedgerFilter('${k.key}')"
             class="rounded-xl border p-3 text-center transition ${active ? "border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50"}">
             <p class="text-xs text-slate-500">${k.key}</p>
-            <p class="text-sm sm:text-base font-bold tabular-nums ${k.amtCls}">${k.key === "미분류" ? `${s.n}건` : k.sign + won(s.sum)}</p>
-            <p class="text-[11px] text-slate-400">${k.key === "미분류" ? "원문 보존" : `${s.n}건`}</p>
+            <p class="text-sm sm:text-base font-bold tabular-nums ${k.amtCls}">${k.key === "미분류" || k.key === "해외" ? `${s.n}건` : k.sign + won(s.sum)}</p>
+            <p class="text-[11px] text-slate-400">${k.key === "미분류" ? "원문 보존" : k.key === "해외" ? "원화 합산 제외" : `${s.n}건`}</p>
         </button>`;
     }).join("");
     const netTile = `<div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
@@ -944,14 +945,14 @@ function drawLedger() {
         <p class="text-[11px] text-slate-400">입금 − 출금</p>
     </div>`;
 
-    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 미분류: "bg-amber-50 text-amber-700" };
+    const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 해외: "bg-teal-50 text-teal-600", 미분류: "bg-amber-50 text-amber-700" };
     const shown = ledgerFilter ? txs.filter((t) => (t.kind || "미분류") === ledgerFilter) : txs;
     window._ledgerTx = shown;
     const txRows = shown.length
         ? shown
               .map((t, i) => {
                   const srcs = [t.bankId ? bankName(t.bankId) : "", t.cardId ? DB.cards.find((c) => c.id === t.cardId)?.company || "" : ""].filter(Boolean).join(" · ");
-                  const amt = t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
+                  const amt = t.kind === "해외" && t.fxAmount != null ? `${t.currency} ${t.fxAmount}` : t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
@@ -959,7 +960,7 @@ function drawLedger() {
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                 </span>
-                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : "text-slate-400"}">${amt}</span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
             </div>`;
               })
               .join("")
@@ -1020,7 +1021,7 @@ function drawLedger() {
             </div>`) : ""}
             ${card(`
             <h3 class="font-bold text-slate-700 mb-3">기간 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
-            <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-2">${tiles}${netTile}</div>`)}
+            <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-8 gap-2">${tiles}${netTile}</div>`)}
             ${collapsible("tx", `거래 내역 <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>`, `
             ${ledgerFilter ? `<div class="mb-2 text-right"><button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button></div>` : ""}
             ${txRows}`)}
@@ -1033,7 +1034,7 @@ async function showTxRaw(i) {
     const { isDenied } = await Swal.fire({
         title: t.title,
         html: `<div class="text-left text-sm">
-            <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
+            <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.kind === "해외" && t.fxAmount != null ? ` · ${t.currency} ${t.fxAmount}` : ""}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
             <pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${t.raw || "(원문 없음)"}</pre>
             <p class="text-xs text-slate-400 mt-2">발신: ${t.sender || "-"}</p>
         </div>`,

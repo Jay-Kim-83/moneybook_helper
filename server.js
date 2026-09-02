@@ -338,7 +338,7 @@ const parseSms = (sender, text, db) => {
     const cumulative = cumM ? parseNum(cumM[1]) : null;
     const noBal = t.replace(/잔액\s*[\d,]+\s*원?/g, "").replace(/누적(?:이용금액)?\s*[\d,]+\s*원?/g, "");
 
-    let kind = null, amount = null, weak = false, m;
+    let kind = null, amount = null, weak = false, fxAmount = null, currency = null, m;
     if ((m = noBal.match(/(자동출금|출금액|입금액|출금|입금|결제|승인)\s*([\d,]+)\s*원/))) {
         amount = parseNum(m[2]);
         kind = /입금/.test(m[1]) ? "입금" : "출금";
@@ -350,7 +350,14 @@ const parseSms = (sender, text, db) => {
         kind = /입금|충전/.test(noBal) ? "입금" : "출금";
         weak = true;
     }
-    if ((amount === null || weak) && AD_RE.test(sender + " " + t)) return null;
+    if (amount === null && /해외|승인|결제/.test(noBal) && (m = noBal.match(/(USD|JPY|EUR|CNY|GBP|HKD|SGD|THB|VND|TWD|AUD|CAD|IDR|PHP|MYR|NZD|CHF)\s?([\d,]+(?:\.\d{1,2})?)/))) {
+        currency = m[1];
+        fxAmount = Number(m[2].replace(/,/g, "")) || 0;
+        if (/취소/.test(t)) fxAmount = -fxAmount;
+        kind = "해외";
+    }
+    if (amount === null && kind !== "해외" && AD_RE.test(sender + " " + t) && !weak) return null;
+    if (weak && AD_RE.test(sender + " " + t)) return null;
     if (amount === null && /누적이용금액/.test(t)) return null;
     if (amount === null && /인증\s?번호|인증\s?코드|본인\s?확인|OTP/i.test(t)) return null;
     if (amount !== null && /예정|내일/.test(noBal)) kind = "안내";
@@ -360,6 +367,10 @@ const parseSms = (sender, text, db) => {
     let title = "";
     const paren = t.match(/자동출금\s*[\d,]+\s*원\(([^)]+)\)/);
     if (paren) title = paren[1];
+    if (!title && kind === "해외") {
+        const mm = t.match(/\d{2}:\d{2}(.+)$/m);
+        if (mm) title = mm[1].replace(/해외|승인|취소/g, "").replace(/\/+/g, " ").replace(/\s{2,}/g, " ").trim();
+    }
     if (!title) {
         title =
             t
@@ -406,23 +417,25 @@ const parseSms = (sender, text, db) => {
     const card = db.cards.find((c) =>
         [c.company, c.alias]
             .filter(Boolean)
-            .some((n) => (sender + " " + t).includes(n) || (kind === "카드" && n.length >= 2 && t.includes(n.slice(0, 2))))
+            .some((n) => (sender + " " + t).includes(n) || ((kind === "카드" || kind === "해외") && n.length >= 2 && t.includes(n.slice(0, 2))))
     );
     if (kind === "출금" && balance === null && card && /결제/.test(noBal)) kind = "카드";
-    if (kind === "카드" && card?.bankId) bankId = card.bankId;
+    if ((kind === "카드" || kind === "해외") && card?.bankId) bankId = card.bankId;
 
     if (amount === null && !bankId && !card && !/(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(t)) return null;
 
     return {
-        kind: amount === null ? "미분류" : kind,
+        kind: amount === null && kind !== "해외" ? "미분류" : kind,
         amount,
+        fxAmount,
+        currency,
         title: title || sender,
         bankId,
         cardId: card?.id || null,
         balance,
         cumulative,
         at,
-        status: amount === null ? "pending" : "ok",
+        status: amount === null && kind !== "해외" ? "pending" : "ok",
     };
 };
 
@@ -453,15 +466,20 @@ const handleIngest = async (req, res) => {
     const tx = { id: genId(), sender, raw: text.trim(), category: "", ...parsed };
     let dedupForce = false;
     let skipStore = false;
-    if (tx.status === "ok" && tx.amount != null && ["입금", "출금", "카드"].includes(tx.kind)) {
+    if (tx.status === "ok" && (tx.amount != null || tx.kind === "해외") && ["입금", "출금", "카드", "해외"].includes(tx.kind)) {
         const shift = (min) => {
             const d = new Date(tx.at.replace(" ", "T") + ":00Z");
             d.setUTCMinutes(d.getUTCMinutes() + min);
             return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
         };
         const recent = await store.listTransactionsRange(shift(-3), shift(3));
-        if (tx.kind === "카드") {
-            const dup = recent.find((o) => o.kind === "카드" && o.amount === tx.amount && (o.cardId === tx.cardId || o.bankId === tx.bankId));
+        if (tx.kind === "카드" || tx.kind === "해외") {
+            const dup = recent.find(
+                (o) =>
+                    o.kind === tx.kind &&
+                    (tx.kind === "해외" ? o.currency === tx.currency && o.fxAmount === tx.fxAmount : o.amount === tx.amount) &&
+                    (o.cardId === tx.cardId || o.bankId === tx.bankId)
+            );
             if (dup) skipStore = true;
         } else if (tx.bankId) {
             const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
