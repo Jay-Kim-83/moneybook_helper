@@ -933,16 +933,16 @@ function drawLedger() {
         const s = stats[k.key] || { sum: 0, n: 0 };
         const active = ledgerFilter === k.key;
         return `<button onclick="setLedgerFilter('${k.key}')"
-            class="rounded-xl border p-3 text-center transition ${active ? "border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50"}">
+            class="rounded-xl border px-1.5 py-3 text-center transition ${active ? "border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50" : "border-slate-200 bg-white hover:bg-slate-50"}">
             <p class="text-xs text-slate-500">${k.key}</p>
-            <p class="text-sm sm:text-base font-bold tabular-nums ${k.amtCls}">${k.key === "미분류" || k.key === "해외" ? `${s.n}건` : k.sign + won(s.sum)}</p>
-            <p class="text-[11px] text-slate-400">${k.key === "미분류" ? "원문 보존" : k.key === "해외" ? "원화 합산 제외" : `${s.n}건`}</p>
+            <p class="text-sm font-bold tabular-nums whitespace-nowrap ${k.amtCls}">${k.key === "미분류" || k.key === "해외" ? `${s.n}건` : k.sign + won(s.sum)}</p>
+            <p class="text-[11px] text-slate-400 whitespace-nowrap">${k.key === "미분류" ? "원문 보존" : k.key === "해외" ? "합산 제외" : `${s.n}건`}</p>
         </button>`;
     }).join("");
-    const netTile = `<div class="rounded-xl border border-slate-200 bg-slate-50 p-3 text-center">
+    const netTile = `<div class="rounded-xl border border-slate-200 bg-slate-50 px-1.5 py-3 text-center">
         <p class="text-xs text-slate-500">순변동</p>
-        <p class="text-sm sm:text-base font-bold tabular-nums ${net >= 0 ? "text-slate-700" : "text-red-600"}">${won(net)}</p>
-        <p class="text-[11px] text-slate-400">입금 − 출금</p>
+        <p class="text-sm font-bold tabular-nums whitespace-nowrap ${net >= 0 ? "text-slate-700" : "text-red-600"}">${won(net)}</p>
+        <p class="text-[11px] text-slate-400 whitespace-nowrap">입금 − 출금</p>
     </div>`;
 
     const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 해외: "bg-teal-50 text-teal-600", 미분류: "bg-amber-50 text-amber-700" };
@@ -1021,7 +1021,7 @@ function drawLedger() {
             </div>`) : ""}
             ${card(`
             <h3 class="font-bold text-slate-700 mb-3">기간 요약 <span class="text-xs font-normal text-slate-400">(누르면 해당 구분만 필터)</span></h3>
-            <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-8 gap-2">${tiles}${netTile}</div>`)}
+            <div class="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-[repeat(5,1fr)_0.55fr_0.6fr_1fr] gap-2">${tiles}${netTile}</div>`)}
             ${collapsible("tx", `거래 내역 <span class="text-xs font-normal text-slate-400">(${ledgerFilter ? `${ledgerFilter} ${shown.length}건 / 전체 ${txs.length}건` : `${txs.length}건`}, 행을 누르면 원문)</span>`, `
             ${ledgerFilter ? `<div class="mb-2 text-right"><button onclick="setLedgerFilter(null)" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100">✕ ${ledgerFilter} 필터 해제</button></div>` : ""}
             ${txRows}`)}
