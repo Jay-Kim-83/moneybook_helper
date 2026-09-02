@@ -459,6 +459,17 @@ const handleIngest = async (req, res) => {
         if (!keyOk) keyOk = safeEqual(key.trim(), ingestKey);
     }
     if (!keyOk) return send(res, 401, { error: "인증 실패" });
+    const seenLines = new Set();
+    text = text
+        .split(/\r?\n/)
+        .filter((l) => {
+            const k = l.trim();
+            if (!k) return false;
+            if (seenLines.has(k)) return false;
+            seenLines.add(k);
+            return true;
+        })
+        .join("\n");
     if (!text.trim()) return send(res, 400, { error: "본문이 없습니다" });
     const db = await store.readDB();
     const parsed = parseSms(sender, text, db);
