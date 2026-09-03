@@ -361,6 +361,7 @@ const parseSms = (sender, text, db) => {
     if (amount === null && /누적이용금액/.test(t)) return null;
     if (amount === null && /인증\s?번호|인증\s?코드|본인\s?확인|OTP/i.test(t)) return null;
     if (amount !== null && /예정|내일/.test(noBal)) kind = "안내";
+    if (amount !== null && balance === null && /결제대금/.test(noBal) && /출금되/.test(noBal)) kind = "안내";
     if (amount !== null && kind !== "안내" && /취소/.test(t)) amount = -amount;
     if (kind === "출금" && balance === null && /승인/.test(noBal)) kind = "카드";
 
