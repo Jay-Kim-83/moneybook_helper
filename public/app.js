@@ -823,6 +823,8 @@ async function editBalance(bankId) {
     toast("success", `${b.name} 잔액이 입력되었습니다`);
 }
 
+const balanceSourceTag = (c) => `${c.manual ? "✏️" : c.est ? "≈" : "📩"} ${c.at.slice(5)}`;
+
 const LEDGER_KINDS = [
     { key: "입금", sign: "+", amtCls: "text-green-600" },
     { key: "출금", sign: "−", amtCls: "text-red-500" },
@@ -890,7 +892,7 @@ function drawLedger() {
                 <td onclick="editBalance('${b.id}')" title="클릭해서 잔액 직접 입력" class="py-2 px-2 text-right tabular-nums font-bold cursor-pointer hover:bg-slate-50 ${c ? (c.amount >= 0 ? "text-slate-800" : "text-red-600") : "text-slate-300"}">${c ? won(c.amount) : "✏️ 입력"}</td>
                 <td ${window._needTips[b.id] ? `onmouseenter="showNeedTip(this, '${b.id}')" onmouseleave="hideNeedTip()" onclick="showNeedTip(this, '${b.id}')"` : ""} class="py-2 px-2 text-right tabular-nums ${window._needTips[b.id] ? "cursor-help" : ""} ${need ? "text-orange-500" : "text-slate-300"}">${need ? won(need) : "—"}${paid ? `<span class="block text-[10px] text-green-600">✓ ${won(paid)} 출금 확인</span>` : ""}${retainUsed ? `<span class="block text-[10px] text-slate-400">남길 ${won(retain)} 중 ${won(retainUsed)} 출금 소진</span>` : ""}</td>
                 <td class="py-2 px-2 text-right tabular-nums font-bold ${free == null ? "text-slate-300" : free >= 0 ? "text-green-600" : "text-red-600"}">${free == null ? "—" : won(free)}</td>
-                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? (c.manual ? "✏️ " : c.est ? "≈ " : "📩 ") + c.at.slice(5) : "수집 전"}</td>
+                <td class="py-2 px-2 text-right text-xs text-slate-400 whitespace-nowrap">${c ? balanceSourceTag(c) : "수집 전"}</td>
             </tr>`;
         })
         .join("");
@@ -1068,24 +1070,52 @@ function moveMonthly(dir) {
     renderMonthly();
 }
 
+const isCurrentCycle = () => selectedMonth === currentAnchor(cycleDay());
+const isLiveCycle = () => isCurrentCycle() && !Object.keys(window._transfersDone || {}).length;
+
+const stampNow = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${pad0(d.getMonth() + 1)}-${pad0(d.getDate())} ${pad0(d.getHours())}:${pad0(d.getMinutes())}`;
+};
+
+const balanceBadge = (auto, manualAt) =>
+    auto
+        ? `<span class="text-xs text-sky-500" title="수집 잔액 (${auto.at})">${balanceSourceTag(auto)}</span>`
+        : manualAt
+          ? `<span class="text-xs text-amber-600" title="직접 입력 (${manualAt})">✏️ 직접 입력</span>`
+          : "";
+
+function editMonthlyBalance(input) {
+    formatMoneyInput(input);
+    const id = input.dataset.balance;
+    if (input.value === "") delete window._balancesManual[id];
+    else window._balancesManual[id] = stampNow();
+    document.querySelector(`[data-balance-badge="${id}"]`).innerHTML = balanceBadge(null, window._balancesManual[id]);
+    renderSummary();
+}
+
 async function renderMonthly() {
     if (!selectedMonth) selectedMonth = currentAnchor(cycleDay());
-    const current = (await api("GET", `/api/monthly/${selectedMonth}`)) || { month: selectedMonth, balances: {}, payments: {}, expenses: [] };
-    const previous = await api("GET", `/api/monthly/${prevMonth(selectedMonth)}`);
+    const [record, previous] = await Promise.all([api("GET", `/api/monthly/${selectedMonth}`), api("GET", `/api/monthly/${prevMonth(selectedMonth)}`)]);
+    const current = record || { month: selectedMonth, balances: {}, payments: {}, expenses: [] };
     window._monthlyExpenses = current.expenses?.length
         ? current.expenses
         : DB.fixedExpenses.map((e) => ({ name: e.name, amount: e.amount, bankId: e.bankId, memo: e.description || "" }));
     window._transfersDone = current.transfersDone || {};
     window._transferLog = current.transferLog || [];
+    window._balancesManual = current.balancesManual || {};
 
+    const live = isLiveCycle();
     const balanceRows = DB.banks.length
         ? DB.banks
               .map((b) => {
                   const saved = current.balances?.[b.id];
-                  const auto = saved == null ? DB.currentBalances?.[b.id] : null;
+                  const collected = DB.currentBalances?.[b.id];
+                  const manualAt = window._balancesManual[b.id];
+                  const keepSaved = saved != null && (!live || !collected || manualAt >= collected.at);
                   return `<div class="flex items-center justify-between gap-3 py-2">
-            <span class="text-slate-700">🏦 ${b.name}${auto ? ` <span class="text-xs text-sky-500" title="문자 수집 잔액 (${auto.at})">📩 ${auto.at.slice(5)}</span>` : ""}</span>
-            <input data-balance="${b.id}" value="${comma(saved ?? auto?.amount ?? "")}" type="text" inputmode="numeric" placeholder="잔액" oninput="formatMoneyInput(this); renderSummary()"
+            <span class="text-slate-700">🏦 ${b.name} <span data-balance-badge="${b.id}">${balanceBadge(keepSaved ? null : collected, live && manualAt)}</span></span>
+            <input data-balance="${b.id}" value="${comma(keepSaved ? saved : (collected?.amount ?? ""))}" type="text" inputmode="numeric" placeholder="잔액" oninput="editMonthlyBalance(this)"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
         </div>`;
               })
@@ -1125,7 +1155,7 @@ async function renderMonthly() {
             </div>
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
-            ${card(`<h3 class="font-bold text-slate-700 mb-2">① 은행 잔액</h3>${balanceRows}`)}
+            ${card(`<h3 class="font-bold text-slate-700 mb-2">① 은행 잔액 <span id="balanceMode" class="text-xs font-normal text-slate-400"></span></h3>${balanceRows}`)}
             ${card(`<h3 class="font-bold text-slate-700 mb-2">② 카드 결제 금액 <span class="text-xs font-normal text-slate-400">(전월 대비 비교)</span></h3>${paymentRows}`)}
         </div>
         <div class="mt-4">
@@ -1254,6 +1284,10 @@ function renderSummary() {
 
     const plan = computeRelayPlan(balanceOf, paymentByBank, expenseByBank);
     const done = window._transfersDone || {};
+    const modeEl = document.getElementById("balanceMode");
+    if (modeEl)
+        modeEl.textContent =
+            !isCurrentCycle() ? "" : isLiveCycle() ?"(수집 잔액 자동 반영 · 이체 플랜 첫 체크 시 고정)" : "(🔒 이체 시작 시점 잔액으로 고정)";
 
     const remainClass = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
     const num = (v, cls = "text-slate-700") => `<td class="text-right py-2 px-2 tabular-nums ${cls}">${won(v)}</td>`;
@@ -1397,6 +1431,7 @@ const monthlyPayload = () => {
     return {
         month: selectedMonth,
         balances,
+        balancesManual: window._balancesManual || {},
         payments,
         expenses: window._monthlyExpenses,
         transfersDone: window._transfersDone || {},
@@ -1425,9 +1460,7 @@ function toggleTransferDone(key, checked) {
     window._transferLog = window._transferLog || [];
     const ctx = window._planCtx;
     const item = ctx?.items.find((t) => t.key === key);
-    const now = new Date();
-    const pad = (n) => String(n).padStart(2, "0");
-    const at = `${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    const at = stampNow().slice(5);
     if (checked) {
         const snap = { at };
         window._transfersDone[key] = snap;
@@ -1803,12 +1836,13 @@ async function runRestart() {
 
 let currentTab = "banks";
 
-function showTab(name) {
+async function showTab(name) {
     currentTab = name;
     localStorage.setItem("activeTab", name);
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
+    if (name === "ledger" || name === "monthly") await reload();
     if (name === "ledger") renderLedger();
     if (name === "monthly") renderMonthly();
     if (name === "history") renderHistory();
@@ -1846,8 +1880,5 @@ async function loadStorageBadge() {
     }
 }
 
-(async () => {
-    await reload();
-    showTab("ledger");
-})();
+showTab("ledger");
 loadStorageBadge();
