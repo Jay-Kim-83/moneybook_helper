@@ -322,7 +322,8 @@ const deploy = async (message) => {
     return { ok: push.ok, log };
 };
 
-const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권|브리핑/;
+const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권|브리핑|최저가|전망|동향/;
+const TX_RE = /입금|출금|이체|송금|결제|승인|충전|인출|납부|환불|취소|예정|내일|보냈|받았|냈어|냈습|갚|나갔|나갈|빠져|썼어/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 const kstNow = () => {
@@ -345,7 +346,7 @@ const parseSms = (sender, text, db) => {
     } else if ((m = noBal.match(/(입금|출금)\s+([\d,]+)/))) {
         amount = parseNum(m[2]);
         kind = m[1] === "입금" ? "입금" : "출금";
-    } else if ((m = noBal.match(/([\d,]+)\s*원/))) {
+    } else if ((m = noBal.match(/([\d,]+)\s*원/)) && parseNum(m[1]) && TX_RE.test(noBal.replace(/대출/g, ""))) {
         amount = parseNum(m[1]);
         kind = /입금|충전/.test(noBal) ? "입금" : "출금";
         weak = true;
