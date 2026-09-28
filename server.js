@@ -388,6 +388,7 @@ const parseSms = (sender, text, db) => {
                 )
                 .pop() || "";
     }
+    const inflow = kind === "입금";
     if (title.includes(">")) kind = "이체";
 
     const now = new Date(Date.now() + 9 * 3600 * 1000);
@@ -406,10 +407,10 @@ const parseSms = (sender, text, db) => {
         }
     }
     if (!bankId) {
-        const hay = sender + " " + t;
-        const hit = db.banks.find((b) =>
-            [b.name, b.name?.replace(/은행/g, ""), b.alias].filter((n) => n && n.length >= 2).some((n) => hay.includes(n))
-        );
+        const bankIn = (hay) =>
+            db.banks.find((b) => [b.name, b.name?.replace(/은행/g, ""), b.alias].filter((n) => n && n.length >= 2).some((n) => hay.includes(n)));
+        const own = t.match(/내\s*(\S+)\s*통장/);
+        const hit = (own && bankIn(own[1])) || bankIn(sender + " " + t);
         if (hit) bankId = hit.id;
     }
     const bankObj = db.banks.find((b) => b.id === bankId);
@@ -436,6 +437,7 @@ const parseSms = (sender, text, db) => {
         cardId: card?.id || null,
         balance,
         cumulative,
+        inflow,
         at,
         status: amount === null && kind !== "해외" ? "pending" : "ok",
     };
@@ -508,7 +510,7 @@ const handleIngest = async (req, res) => {
     if (tx.bankId && tx.balance != null && tx.status === "ok") {
         db.currentBalances = db.currentBalances || {};
         const cur = db.currentBalances[tx.bankId];
-        const chained = cur && tx.balance === cur.amount + (tx.kind === "입금" ? tx.amount : -(tx.amount || 0));
+        const chained = cur && tx.balance === cur.amount + (tx.inflow ? tx.amount : -(tx.amount || 0));
         const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && (chained || cur.est)) || (dedupForce && cur.est);
         if (newer) {
             db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur && String(cur.at) > String(tx.at) ? cur.at : tx.at };
@@ -517,7 +519,7 @@ const handleIngest = async (req, res) => {
     } else if (tx.bankId && tx.balance == null && tx.status === "ok" && tx.amount != null && ["입금", "출금", "이체"].includes(tx.kind)) {
         const cur = db.currentBalances?.[tx.bankId];
         if (cur && String(tx.at) >= String(cur.at)) {
-            db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.kind === "입금" ? tx.amount : -tx.amount), at: tx.at, est: true };
+            db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.inflow ? tx.amount : -tx.amount), at: tx.at, est: true };
             dirty = true;
         }
     }
@@ -534,7 +536,7 @@ const handleIngest = async (req, res) => {
         }
     }
     if (dirty) await store.writeDB(db);
-    send(res, 200, { ok: true, ...(skipStore ? { dedup: true } : {}), alert: !skipStore && tx.status === "pending" && /(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(tx.raw), transaction: tx });
+    send(res, 200, { ok: true, ...(skipStore ? { dedup: true } : {}), alert: !skipStore && tx.status === "pending" && TX_RE.test(tx.raw.replace(/대출/g, "")) && /\d{1,3}(?:,\d{3})+|\d\s*원/.test(tx.raw), transaction: tx });
 };
 
 const handleAuth = async (req, res, action) => {
