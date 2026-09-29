@@ -1516,9 +1516,11 @@ const memberLabel = (m) => `${m.name}${m.heads > 1 ? ` (${m.heads}명)` : ""}`;
 
 const sortedItems = (trip) => [...trip.items].sort((a, b) => a.at.localeCompare(b.at));
 
+const payerIdOf = (trip, item) => item.payerId || trip.members[0]?.id;
+
 const itemNote = (trip, item) => {
     const sharers = trip.members.filter((m) => item.shareIds.includes(m.id)).map((m) => m.name);
-    return `${trip.members.find((m) => m.id === item.payerId)?.name || "미지정"} 결제${sharers.length ? ` · ${sharers.join(", ")}만 부담` : ""}`;
+    return `${trip.members.find((m) => m.id === payerIdOf(trip, item))?.name || "미지정"} 결제${sharers.length ? ` · ${sharers.join(", ")}만 부담` : ""}`;
 };
 
 const fieldLabel = (text) => `<label class="block font-medium text-slate-600 mt-3 mb-1">${text}</label>`;
@@ -1529,7 +1531,7 @@ function settleTrip(trip) {
     const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
     let unpaid = 0;
     trip.items.forEach((it) => {
-        const payer = byId[it.payerId];
+        const payer = byId[payerIdOf(trip, it)];
         if (payer) payer.paid += it.amount;
         else unpaid += it.amount;
         const picked = it.shareIds.map((id) => byId[id]).filter(Boolean);
@@ -1708,17 +1710,18 @@ async function putTrip(trip, patch) {
     renderTrips();
 }
 
-const memberRowHtml = (m = {}) => `<div class="tmRow flex items-center gap-2 mt-2" data-id="${m.id || ""}">
-        <input class="tmName swal2-input !m-0 !flex-1 !w-0" value="${esc(m.name)}" placeholder="이름 (예: 우리 집, 홍길동)" />
+const memberRowHtml = (m = {}, mine = false) => `<div class="tmRow flex items-center gap-2 mt-2" data-id="${m.id || ""}">
+        <input class="tmName swal2-input !m-0 !flex-1 !w-0" value="${esc(m.name)}" placeholder="${mine ? "나" : "이름 (예: 형네, 홍길동)"}" />
         <input class="tmHeads swal2-input !m-0 !w-20 text-right" type="number" min="1" value="${m.heads || 1}" />
         <span class="text-xs text-slate-400 shrink-0">명</span>
-        <button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1">✕</button>
+        ${mine ? `<span class="text-xs text-indigo-600 shrink-0">본인</span>` : `<button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1">✕</button>`}
     </div>`;
 
 const addMemberRow = () => document.getElementById("tmList").insertAdjacentHTML("beforeend", memberRowHtml());
 
 async function tripModal(trip) {
-    const base = trip || { splitMode: "team", members: (currentTrip()?.members || [{ name: "우리 집" }]).map(({ name, heads }) => ({ name, heads })) };
+    const base = trip || { splitMode: "team", members: (currentTrip()?.members || []).map(({ name, heads }) => ({ name, heads })) };
+    const members = base.members.length ? base.members : [{ name: "나" }];
     const { value } = await Swal.fire({
         title: trip ? "모임 수정" : "모임 추가",
         html: `<div class="text-left text-sm">
@@ -1732,10 +1735,10 @@ async function tripModal(trip) {
             <select id="t_mode" class="swal2-input !m-0 !w-full !flex">${Object.entries(SPLIT_MODES).map(([k, v]) => `<option value="${k}" ${k === base.splitMode ? "selected" : ""}>${v}</option>`).join("")}</select>
             <p class="text-xs text-slate-400 mt-1">참가 단위별 균등 = 아래 한 줄마다 같은 금액 · 인원수 비례 = 인원수만큼 부담</p>
             <div class="flex items-center justify-between gap-2 mt-4 mb-1">
-                <span class="font-medium text-slate-600">참가자 <span class="text-xs font-normal text-slate-400">(첫 줄 = 본인 · 가족은 한 줄에 인원수, 개인은 한 사람씩 1명)</span></span>
+                <span class="font-medium text-slate-600">참가자 <span class="text-xs font-normal text-slate-400">(첫 줄 = 본인, 경비의 기본 결제자 · 가족은 한 줄에 인원수, 개인은 한 사람씩 1명)</span></span>
                 <button type="button" onclick="addMemberRow()" class="text-indigo-600 text-xs hover:underline shrink-0">+ 추가</button>
             </div>
-            <div id="tmList">${base.members.map((m) => memberRowHtml(m)).join("")}</div>
+            <div id="tmList">${members.map((m, i) => memberRowHtml(m, !i)).join("")}</div>
         </div>`,
         ...SAVE_DIALOG,
         preConfirm: () => {
@@ -1745,7 +1748,7 @@ async function tripModal(trip) {
                 end: document.getElementById("t_end").value,
                 splitMode: document.getElementById("t_mode").value,
                 members: [...document.querySelectorAll("#tmList .tmRow")]
-                    .map((r) => ({ id: r.dataset.id, name: r.querySelector(".tmName").value.trim(), heads: Number(r.querySelector(".tmHeads").value) || 1 }))
+                    .map((r, i) => ({ id: r.dataset.id, name: r.querySelector(".tmName").value.trim() || (i ? "" : "나"), heads: Number(r.querySelector(".tmHeads").value) || 1 }))
                     .filter((m) => m.name),
             };
             const error = !v.name ? "모임 이름을 입력하세요" : !v.start !== !v.end ? "시작일과 종료일을 함께 입력하세요" : v.start > v.end ? "종료일이 시작일보다 빠릅니다" : "";
@@ -1799,8 +1802,7 @@ async function tripItemModal(trip, item) {
             </div>
             ${fieldLabel("결제한 사람")}
             <select id="ti_payer" class="swal2-input !m-0 !w-full !flex">
-                <option value="">미지정</option>
-                ${trip.members.map((m) => `<option value="${m.id}" ${m.id === item.payerId ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+                ${trip.members.map((m) => `<option value="${m.id}" ${m.id === payerIdOf(trip, item) ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
             </select>
             ${fieldLabel("부담 대상")}
             <div class="flex flex-wrap gap-x-4 gap-y-1">
