@@ -272,7 +272,7 @@ const normalize = (collection, body) => {
         if ("closed" in data) data.closed = !!data.closed;
         if ("members" in data)
             data.members = list(data.members)
-                .map((m) => ({ id: String(m?.id || genId()), name: String(m?.name || "").trim(), heads: Math.max(1, Math.round(Number(m?.heads)) || 1) }))
+                .map((m) => ({ id: String(m?.id || genId()), name: String(m?.name || "").trim(), heads: Math.max(1, Math.round(Number(m?.heads)) || 1), me: !!m?.me }))
                 .filter((m) => m.name);
         if ("items" in data)
             data.items = list(data.items)

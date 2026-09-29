@@ -1516,7 +1516,9 @@ const memberLabel = (m) => `${m.name}${m.heads > 1 ? ` (${m.heads}명)` : ""}`;
 
 const sortedItems = (trip) => [...trip.items].sort((a, b) => a.at.localeCompare(b.at));
 
-const payerIdOf = (trip, item) => item.payerId || trip.members[0]?.id;
+const meOf = (members) => members.find((m) => m.me) || members.find((m) => m.name === "나") || members[0];
+
+const payerIdOf = (trip, item) => item.payerId || meOf(trip.members)?.id;
 
 const itemNote = (trip, item) => {
     const sharers = trip.members.filter((m) => item.shareIds.includes(m.id)).map((m) => m.name);
@@ -1592,6 +1594,7 @@ function renderTrips() {
     }
     selectedTripId = trip.id;
     const s = settleTrip(trip);
+    const me = meOf(trip.members);
     const period = tripPeriod(trip);
     const pills = [...DB.trips]
         .reverse()
@@ -1651,7 +1654,7 @@ function renderTrips() {
                 <div>
                     <p class="text-lg font-bold text-slate-800">${esc(trip.name)} ${trip.closed ? `<span class="align-middle text-xs font-normal px-2 py-0.5 rounded bg-slate-100 text-slate-500">🔒 마감</span>` : ""}</p>
                     <p class="text-sm text-slate-500 mt-1">${period || "기간 미지정"} · ${SPLIT_MODES[trip.splitMode]}</p>
-                    <div class="mt-2 flex flex-wrap gap-1">${trip.members.map((m, i) => `<span class="inline-block text-xs px-2 py-0.5 rounded ${i ? "bg-slate-100 text-slate-600" : "bg-indigo-50 text-indigo-700"}">${esc(memberLabel(m))}${i ? "" : " · 본인"}</span>`).join("")}</div>
+                    <div class="mt-2 flex flex-wrap gap-1">${trip.members.map((m) => `<span class="inline-block text-xs px-2 py-0.5 rounded ${m === me ? "bg-indigo-50 text-indigo-700" : "bg-slate-100 text-slate-600"}">${esc(memberLabel(m))}${m === me ? " · 본인" : ""}</span>`).join("")}</div>
                 </div>
                 <div class="flex items-center gap-3 shrink-0">
                     ${trip.closed ? "" : textButton("수정", "editTrip()", "text-indigo-600")}
@@ -1711,17 +1714,19 @@ async function putTrip(trip, patch) {
 }
 
 const memberRowHtml = (m = {}, mine = false) => `<div class="tmRow flex items-center gap-2 mt-2" data-id="${m.id || ""}">
-        <input class="tmName swal2-input !m-0 !flex-1 !w-0" value="${esc(m.name)}" placeholder="${mine ? "나" : "이름 (예: 형네, 홍길동)"}" />
+        <label class="flex items-center gap-1 text-xs text-slate-500 shrink-0 cursor-pointer"><input type="radio" name="tmMe" class="tmMe w-4 h-4 accent-indigo-600" ${mine ? "checked" : ""} /> 본인</label>
+        <input class="tmName swal2-input !m-0 !flex-1 !w-0" value="${esc(m.name)}" placeholder="이름 (예: 형네, 홍길동)" />
         <input class="tmHeads swal2-input !m-0 !w-20 text-right" type="number" min="1" value="${m.heads || 1}" />
         <span class="text-xs text-slate-400 shrink-0">명</span>
-        ${mine ? `<span class="text-xs text-indigo-600 shrink-0">본인</span>` : `<button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1">✕</button>`}
+        <button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1 [.tmRow:has(.tmMe:checked)_&]:invisible">✕</button>
     </div>`;
 
 const addMemberRow = () => document.getElementById("tmList").insertAdjacentHTML("beforeend", memberRowHtml());
 
 async function tripModal(trip) {
-    const base = trip || { splitMode: "team", members: (currentTrip()?.members || []).map(({ name, heads }) => ({ name, heads })) };
+    const base = trip || { splitMode: "team", members: (currentTrip()?.members || []).map(({ name, heads, me }) => ({ name, heads, me })) };
     const members = base.members.length ? base.members : [{ name: "나" }];
+    const me = meOf(members);
     const { value } = await Swal.fire({
         title: trip ? "모임 수정" : "모임 추가",
         html: `<div class="text-left text-sm">
@@ -1735,10 +1740,10 @@ async function tripModal(trip) {
             <select id="t_mode" class="swal2-input !m-0 !w-full !flex">${Object.entries(SPLIT_MODES).map(([k, v]) => `<option value="${k}" ${k === base.splitMode ? "selected" : ""}>${v}</option>`).join("")}</select>
             <p class="text-xs text-slate-400 mt-1">참가 단위별 균등 = 아래 한 줄마다 같은 금액 · 인원수 비례 = 인원수만큼 부담</p>
             <div class="flex items-center justify-between gap-2 mt-4 mb-1">
-                <span class="font-medium text-slate-600">참가자 <span class="text-xs font-normal text-slate-400">(첫 줄 = 본인, 경비의 기본 결제자 · 가족은 한 줄에 인원수, 개인은 한 사람씩 1명)</span></span>
+                <span class="font-medium text-slate-600">참가자 <span class="text-xs font-normal text-slate-400">(본인 = 경비의 기본 결제자 · 가족은 한 줄에 인원수, 개인은 한 사람씩 1명)</span></span>
                 <button type="button" onclick="addMemberRow()" class="text-indigo-600 text-xs hover:underline shrink-0">+ 추가</button>
             </div>
-            <div id="tmList">${members.map((m, i) => memberRowHtml(m, !i)).join("")}</div>
+            <div id="tmList">${members.map((m) => memberRowHtml(m, m === me)).join("")}</div>
         </div>`,
         ...SAVE_DIALOG,
         preConfirm: () => {
@@ -1748,7 +1753,8 @@ async function tripModal(trip) {
                 end: document.getElementById("t_end").value,
                 splitMode: document.getElementById("t_mode").value,
                 members: [...document.querySelectorAll("#tmList .tmRow")]
-                    .map((r, i) => ({ id: r.dataset.id, name: r.querySelector(".tmName").value.trim() || (i ? "" : "나"), heads: Number(r.querySelector(".tmHeads").value) || 1 }))
+                    .map((r) => ({ id: r.dataset.id, me: r.querySelector(".tmMe").checked, name: r.querySelector(".tmName").value.trim(), heads: Number(r.querySelector(".tmHeads").value) || 1 }))
+                    .map((m) => ({ ...m, name: m.name || (m.me ? "나" : "") }))
                     .filter((m) => m.name),
             };
             const error = !v.name ? "모임 이름을 입력하세요" : !v.start !== !v.end ? "시작일과 종료일을 함께 입력하세요" : v.start > v.end ? "종료일이 시작일보다 빠릅니다" : "";
@@ -1834,7 +1840,7 @@ async function tripItemModal(trip, item) {
 
 async function addTripItem() {
     const trip = currentTrip();
-    const v = await tripItemModal(trip, { at: trip.start || stampNow().slice(0, 10), payerId: trip.members[0]?.id });
+    const v = await tripItemModal(trip, { at: trip.start || stampNow().slice(0, 10), payerId: meOf(trip.members)?.id });
     if (!v) return;
     await putTrip(trip, { items: [...trip.items, v] });
     toast("success", "경비가 추가되었습니다");
@@ -1848,7 +1854,7 @@ async function editTripItem(id) {
     toast("success", v.remove ? "경비가 삭제되었습니다" : "경비가 수정되었습니다");
 }
 
-const txToItem = (trip, t) => ({ txId: t.id, at: String(t.at).slice(0, 10), title: t.title, amount: Math.abs(t.amount), payerId: trip.members[0]?.id || "", shareIds: [], memo: "" });
+const txToItem = (trip, t) => ({ txId: t.id, at: String(t.at).slice(0, 10), title: t.title, amount: Math.abs(t.amount), payerId: meOf(trip.members)?.id || "", shareIds: [], memo: "" });
 
 async function importTripTx() {
     const trip = currentTrip();
