@@ -1,4 +1,4 @@
-let DB = { banks: [], cards: [], fixedExpenses: [], monthly: [] };
+let DB = { banks: [], cards: [], fixedExpenses: [], trips: [], monthly: [] };
 
 const api = async (method, url, body) => {
     const res = await fetch(url, {
@@ -37,6 +37,17 @@ function formatMoneyInput(el) {
     el.setSelectionRange(pos, pos);
 }
 
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+async function copyText(text, done = "복사되었습니다") {
+    try {
+        await navigator.clipboard.writeText(text);
+        toast("success", done);
+    } catch {
+        toast("error", "복사 실패 — 직접 선택해 주세요");
+    }
+}
+
 const last4 = (n) => (n ? `•••• ${n}` : "-");
 
 const bankName = (id) => DB.banks.find((b) => b.id === id)?.name || "미지정";
@@ -57,6 +68,10 @@ const confirmDelete = async (text) =>
         })
     ).isConfirmed;
 
+const SAVE_DIALOG = { focusConfirm: false, showCancelButton: true, confirmButtonText: "저장", cancelButtonText: "취소", confirmButtonColor: "#4f46e5" };
+
+const validated = (error, value) => (error ? (Swal.showValidationMessage(error), false) : value);
+
 const formModal = async ({ title, fields, values = {} }) => {
     const html = fields
         .map((f) => {
@@ -69,17 +84,13 @@ const formModal = async ({ title, fields, values = {} }) => {
             if (f.type === "number") {
                 return `${label}<input id="f_${f.name}" type="text" inputmode="numeric" value="${comma(v)}" placeholder="${f.label}" oninput="formatMoneyInput(this)" class="swal2-input !m-0 !w-full" />`;
             }
-            return `${label}<input id="f_${f.name}" type="${f.type || "text"}" value="${v}" placeholder="${f.label}" class="swal2-input !m-0 !w-full" />`;
+            return `${label}<input id="f_${f.name}" type="${f.type || "text"}" value="${esc(v)}" placeholder="${f.label}" class="swal2-input !m-0 !w-full" />`;
         })
         .join("");
     const { value } = await Swal.fire({
         title,
         html: `<div class="text-left">${html}</div>`,
-        focusConfirm: false,
-        showCancelButton: true,
-        confirmButtonText: "저장",
-        cancelButtonText: "취소",
-        confirmButtonColor: "#4f46e5",
+        ...SAVE_DIALOG,
         didOpen: () => {
             document.getElementById(`f_${fields[0].name}`)?.focus();
             document.querySelectorAll("[id^='f_']").forEach((el) => {
@@ -314,13 +325,7 @@ async function secretDelete(type, id) {
 
 async function copySecret(k) {
     const v = window._secretVals?.[k];
-    if (v == null) return;
-    try {
-        await navigator.clipboard.writeText(String(v));
-        toast("success", "복사되었습니다");
-    } catch {
-        toast("error", "복사 실패");
-    }
+    if (v != null) await copyText(String(v));
 }
 
 const relayChain = () => DB.banks.filter((b) => !b.relayExclude);
@@ -950,6 +955,7 @@ function drawLedger() {
     const kindCls = { 입금: "bg-green-50 text-green-700", 출금: "bg-red-50 text-red-600", 카드: "bg-purple-50 text-purple-700", 이체: "bg-slate-100 text-slate-500", 안내: "bg-sky-50 text-sky-600", 해외: "bg-teal-50 text-teal-600", 미분류: "bg-amber-50 text-amber-700" };
     const shown = ledgerFilter ? txs.filter((t) => (t.kind || "미분류") === ledgerFilter) : txs;
     window._ledgerTx = shown;
+    const links = tripLinks();
     const txRows = shown.length
         ? shown
               .map((t, i) => {
@@ -961,6 +967,7 @@ function drawLedger() {
                 <span class="flex-1 text-sm text-slate-700 truncate">${t.title}
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
+                    ${links[t.id] ? `<span class="text-xs text-teal-600">🧳 ${esc(links[t.id])}</span>` : ""}
                 </span>
                 <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
             </div>`;
@@ -981,7 +988,7 @@ function drawLedger() {
                 <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑️</button>
             </div>
         </div>
-        <div class="grid gap-4">
+        <div class="grid grid-cols-1 gap-4">
             ${collapsible("bal", `은행별 현재 잔액 <span class="text-xs font-normal text-slate-400">(유지 필요 = 이번 기간에 안 빠져나간 카드값+카드외지출 + 남길 금액 — 같은 금액의 출금 문자가 오면 자동 차감)</span>`, `
             <div class="overflow-x-auto">
                 <table class="w-full text-sm">
@@ -1033,20 +1040,26 @@ function drawLedger() {
 async function showTxRaw(i) {
     const t = window._ledgerTx?.[i];
     if (!t) return;
-    const { isDenied } = await Swal.fire({
+    const linked = tripLinks()[t.id];
+    const { isDenied, dismiss } = await Swal.fire({
         title: t.title,
         html: `<div class="text-left text-sm">
             <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.kind === "해외" && t.fxAmount != null ? ` · ${t.currency} ${t.fxAmount}` : ""}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
             <pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${t.raw || "(원문 없음)"}</pre>
             <p class="text-xs text-slate-400 mt-2">발신: ${t.sender || "-"}</p>
+            ${linked ? `<p class="text-xs text-teal-600 mt-2">🧳 ${esc(linked)}에 담긴 거래입니다.</p>` : ""}
         </div>`,
         confirmButtonText: "닫기",
         confirmButtonColor: "#4f46e5",
         showDenyButton: true,
         denyButtonText: "삭제",
         denyButtonColor: "#dc2626",
+        showCancelButton: !linked && !!t.amount,
+        cancelButtonText: "🧳 모임에 담기",
+        cancelButtonColor: "#0d9488",
         reverseButtons: true,
     });
+    if (dismiss === Swal.DismissReason.cancel) return addTxToTrip(t);
     if (isDenied && (await confirmDelete("이 거래를 삭제합니다."))) {
         await api("DELETE", `/api/transactions/${t.id}`);
         toast("success", "거래가 삭제되었습니다");
@@ -1237,12 +1250,7 @@ const onExpenseMemo = (i, val) => (window._monthlyExpenses[i].memo = val);
 async function copyExpenseMemo(i) {
     const memo = window._monthlyExpenses[i].memo || "";
     if (!memo) return toast("info", "메모가 비어 있습니다");
-    try {
-        await navigator.clipboard.writeText(memo);
-        toast("success", "메모가 복사되었습니다");
-    } catch {
-        toast("error", "복사 실패 — 직접 선택해 주세요");
-    }
+    await copyText(memo, "메모가 복사되었습니다");
 }
 
 const removeMonthlyExpense = (i) => {
@@ -1494,11 +1502,408 @@ async function saveMonthly() {
     toast("success", `${selectedMonth} 결제 내역이 저장되었습니다`);
 }
 
+let selectedTripId = null;
+
+const SPLIT_MODES = { team: "참가 단위별 균등", head: "인원수 비례" };
+
+const tripLinks = () => Object.fromEntries(DB.trips.flatMap((t) => t.items.filter((i) => i.txId).map((i) => [i.txId, t.name])));
+
+const currentTrip = () => DB.trips.find((t) => t.id === selectedTripId) || DB.trips[DB.trips.length - 1];
+
+const tripPeriod = (t) => (t.start || t.end ? `${t.start.replace(/-/g, ".")} ~ ${t.end.replace(/-/g, ".")}` : "");
+
+const memberLabel = (m) => `${m.name}${m.heads > 1 ? ` (${m.heads}명)` : ""}`;
+
+const sortedItems = (trip) => [...trip.items].sort((a, b) => a.at.localeCompare(b.at));
+
+const itemNote = (trip, item) => {
+    const sharers = trip.members.filter((m) => item.shareIds.includes(m.id)).map((m) => m.name);
+    return `${trip.members.find((m) => m.id === item.payerId)?.name || "미지정"} 결제${sharers.length ? ` · ${sharers.join(", ")}만 부담` : ""}`;
+};
+
+const fieldLabel = (text) => `<label class="block font-medium text-slate-600 mt-3 mb-1">${text}</label>`;
+
+function settleTrip(trip) {
+    const weight = (m) => (trip.splitMode === "head" ? m.heads : 1);
+    const rows = trip.members.map((m) => ({ ...m, paid: 0, owed: 0 }));
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    let unpaid = 0;
+    trip.items.forEach((it) => {
+        const payer = byId[it.payerId];
+        if (payer) payer.paid += it.amount;
+        else unpaid += it.amount;
+        const picked = it.shareIds.map((id) => byId[id]).filter(Boolean);
+        const targets = picked.length ? picked : rows;
+        if (!targets.length) return;
+        const totalWeight = targets.reduce((s, r) => s + weight(r), 0);
+        let rest = it.amount;
+        targets.forEach((r) => {
+            const part = Math.trunc((it.amount * weight(r)) / totalWeight);
+            r.owed += part;
+            rest -= part;
+        });
+        (targets.includes(payer) ? payer : targets[0]).owed += rest;
+    });
+    rows.forEach((r) => (r.net = r.paid - r.owed));
+    const pool = rows.map(({ name, net }) => ({ name, net }));
+    const debtors = pool.filter((p) => p.net < 0).sort((a, b) => a.net - b.net);
+    const creditors = pool.filter((p) => p.net > 0).sort((a, b) => b.net - a.net);
+    const transfers = [];
+    while (debtors.length && creditors.length) {
+        const amount = Math.min(-debtors[0].net, creditors[0].net);
+        transfers.push({ from: debtors[0].name, to: creditors[0].name, amount });
+        debtors[0].net += amount;
+        creditors[0].net -= amount;
+        if (!debtors[0].net) debtors.shift();
+        if (!creditors[0].net) creditors.shift();
+    }
+    return { rows, transfers, unpaid, total: trip.items.reduce((s, i) => s + i.amount, 0) };
+}
+
+function tripSummaryText(trip) {
+    const s = settleTrip(trip);
+    const period = tripPeriod(trip);
+    return [
+        `🧳 ${trip.name} 정산${period ? ` (${period})` : ""}`,
+        `총 경비 ${won(s.total)} · ${trip.items.length}건 · ${SPLIT_MODES[trip.splitMode]}`,
+        "",
+        "[경비 내역]",
+        ...sortedItems(trip).map((i) => `${i.at.slice(5).replace("-", ".")} ${i.title} ${won(i.amount)} (${itemNote(trip, i)})`),
+        "",
+        "[참가자별]",
+        ...s.rows.map((r) => `${memberLabel(r)}: 낸 돈 ${won(r.paid)} / 부담 ${won(r.owed)}`),
+        "",
+        "[송금]",
+        ...(s.transfers.length ? s.transfers.map((t) => `${t.from} → ${t.to} ${won(t.amount)}`) : ["송금할 내역이 없습니다."]),
+    ].join("\n");
+}
+
+const copyTripSummary = () => copyText(tripSummaryText(currentTrip()), "정산 내용이 복사되었습니다");
+
+function renderTrips() {
+    const el = document.getElementById("tab-trips");
+    const header = sectionHeader("모임·여행 정산", "+ 모임 추가", "saveTrip()");
+    const trip = currentTrip();
+    if (!trip) {
+        el.innerHTML = header + emptyState("등록된 모임이 없습니다. 모임을 추가한 뒤 잔액·거래 탭의 거래를 눌러 담아 보세요.");
+        return;
+    }
+    selectedTripId = trip.id;
+    const s = settleTrip(trip);
+    const period = tripPeriod(trip);
+    const pills = [...DB.trips]
+        .reverse()
+        .map(
+            (t) =>
+                `<button onclick="selectTrip('${t.id}')" class="px-3 py-1.5 rounded-full text-sm border transition ${t.id === trip.id ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"}">${t.closed ? "🔒" : "🧳"} ${esc(t.name)}</button>`
+        )
+        .join("");
+    const tile = (label, value, sub) => `<div class="rounded-xl border border-slate-200 bg-slate-50 px-2 py-3 text-center">
+        <p class="text-xs text-slate-500">${label}</p>
+        <p class="text-base font-bold tabular-nums text-slate-800 whitespace-nowrap">${value}</p>
+        <p class="text-[11px] text-slate-400">${sub}</p>
+    </div>`;
+    const itemRows = trip.items.length
+        ? sortedItems(trip)
+              .map(
+                  (i) => `<div ${trip.closed ? "" : `onclick="editTripItem('${i.id}')"`} class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 ${trip.closed ? "" : "cursor-pointer hover:bg-slate-50"}">
+                <span class="text-xs text-slate-400 tabular-nums w-12 shrink-0">${i.at.slice(5) || "—"}</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${esc(i.title)}
+                    <span class="text-xs text-slate-400">(${esc(itemNote(trip, i))})</span>
+                    ${i.txId ? `<span class="text-xs text-sky-500" title="수집된 거래에서 담은 항목">📩</span>` : ""}
+                    ${i.memo ? `<span class="text-xs text-slate-400">${esc(i.memo)}</span>` : ""}
+                </span>
+                <span class="font-bold tabular-nums text-sm shrink-0 text-slate-800">${won(i.amount)}</span>
+            </div>`
+              )
+              .join("")
+        : emptyState("담긴 경비가 없습니다.");
+    const settleRows = s.rows
+        .map(
+            ({ net, ...r }) => `<tr class="border-b border-slate-100">
+                <td class="py-2 px-2 font-medium text-slate-700 whitespace-nowrap">${esc(memberLabel(r))}</td>
+                <td class="py-2 px-2 text-right tabular-nums">${won(r.paid)}</td>
+                <td class="py-2 px-2 text-right tabular-nums">${won(r.owed)}</td>
+                <td class="py-2 px-2 text-right tabular-nums font-bold whitespace-nowrap ${net > 0 ? "text-green-600" : net < 0 ? "text-red-500" : "text-slate-400"}">${net > 0 ? `${won(net)} 받음` : net < 0 ? `${won(-net)} 보냄` : "정산 없음"}</td>
+            </tr>`
+        )
+        .join("");
+    const transferRows = s.transfers.length
+        ? s.transfers
+              .map(
+                  (t) => `<div class="flex items-center justify-between gap-3 py-2 border-b border-slate-100 last:border-0 text-sm">
+                <span class="text-slate-700">${esc(t.from)} <span class="text-slate-400">→</span> ${esc(t.to)}</span>
+                <span class="font-bold tabular-nums text-indigo-600">${won(t.amount)}</span>
+            </div>`
+              )
+              .join("")
+        : `<p class="text-sm text-slate-400 py-2">송금할 내역이 없습니다.</p>`;
+    const textButton = (label, onClick, cls) => `<button onclick="${onClick}" class="${cls} hover:underline text-sm">${label}</button>`;
+    const outlineButton = (label, onClick) => `<button onclick="${onClick}" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">${label}</button>`;
+    el.innerHTML =
+        header +
+        `<div class="flex flex-wrap gap-2 mb-4">${pills}</div>
+        <div class="grid grid-cols-1 gap-4">
+            ${card(`
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <p class="text-lg font-bold text-slate-800">${esc(trip.name)} ${trip.closed ? `<span class="align-middle text-xs font-normal px-2 py-0.5 rounded bg-slate-100 text-slate-500">🔒 마감</span>` : ""}</p>
+                    <p class="text-sm text-slate-500 mt-1">${period || "기간 미지정"} · ${SPLIT_MODES[trip.splitMode]}</p>
+                    <div class="mt-2 flex flex-wrap gap-1">${trip.members.map((m, i) => `<span class="inline-block text-xs px-2 py-0.5 rounded ${i ? "bg-slate-100 text-slate-600" : "bg-indigo-50 text-indigo-700"}">${esc(memberLabel(m))}${i ? "" : " · 본인"}</span>`).join("")}</div>
+                </div>
+                <div class="flex items-center gap-3 shrink-0">
+                    ${trip.closed ? "" : textButton("수정", "editTrip()", "text-indigo-600")}
+                    ${textButton(trip.closed ? "마감 해제" : "마감", "toggleTripClosed()", "text-emerald-600")}
+                    ${textButton("삭제", "deleteTrip()", "text-red-600")}
+                </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-4">
+                ${tile("총 경비", won(s.total), `${trip.items.length}건`)}
+                ${tile("참가", `${trip.members.length}곳`, `총 ${trip.members.reduce((n, m) => n + m.heads, 0)}명`)}
+                ${tile("송금", `${s.transfers.length}건`, "정산 결과 기준")}
+            </div>`)}
+            ${card(`
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 class="font-bold text-slate-700">경비 내역 <span class="text-xs font-normal text-slate-400">(행을 누르면 수정)</span></h3>
+                ${trip.closed ? "" : `<div class="flex items-center gap-2">
+                    ${outlineButton("📩 기간 거래 불러오기", "importTripTx()")}
+                    <button onclick="addTripItem()" class="text-sm px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white">+ 직접 추가</button>
+                </div>`}
+            </div>
+            ${itemRows}`)}
+            ${card(`
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 class="font-bold text-slate-700">정산 결과</h3>
+                ${outlineButton("📋 정산 내용 복사", "copyTripSummary()")}
+            </div>
+            ${s.unpaid ? `<p class="text-xs text-amber-600 mb-2">⚠ 결제한 사람이 지정되지 않은 경비가 ${won(s.unpaid)} 있습니다. 지정해야 송금 목록이 맞습니다.</p>` : ""}
+            ${trip.members.length < 2
+                ? `<p class="text-sm text-slate-400 py-2">참가자를 2곳 이상 등록하면 정산 결과가 표시됩니다.</p>`
+                : `<div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                    <thead>
+                        <tr class="text-slate-500 border-b-2 border-slate-200 text-xs">
+                            <th class="text-left py-2 px-2">참가자</th>
+                            <th class="text-right py-2 px-2">낸 돈</th>
+                            <th class="text-right py-2 px-2">부담액</th>
+                            <th class="text-right py-2 px-2">차액</th>
+                        </tr>
+                    </thead>
+                    <tbody>${settleRows}</tbody>
+                </table>
+            </div>
+            <h4 class="font-bold text-slate-600 text-sm mt-4 mb-1">송금 목록</h4>
+            ${transferRows}`}`)}
+        </div>`;
+}
+
+const selectTrip = (id) => {
+    selectedTripId = id;
+    renderTrips();
+};
+
+async function putTrip(trip, patch) {
+    const saved = await api("PUT", `/api/trips/${trip.id}`, patch);
+    DB.trips = DB.trips.map((t) => (t.id === saved.id ? saved : t));
+    renderTrips();
+}
+
+const memberRowHtml = (m = {}) => `<div class="tmRow flex items-center gap-2 mt-2" data-id="${m.id || ""}">
+        <input class="tmName swal2-input !m-0 !flex-1 !w-0" value="${esc(m.name)}" placeholder="이름 (예: 우리 집, 홍길동)" />
+        <input class="tmHeads swal2-input !m-0 !w-20 text-right" type="number" min="1" value="${m.heads || 1}" />
+        <span class="text-xs text-slate-400 shrink-0">명</span>
+        <button type="button" onclick="this.parentElement.remove()" class="text-red-500 text-sm px-1">✕</button>
+    </div>`;
+
+const addMemberRow = () => document.getElementById("tmList").insertAdjacentHTML("beforeend", memberRowHtml());
+
+async function tripModal(trip) {
+    const base = trip || { splitMode: "team", members: (currentTrip()?.members || [{ name: "우리 집" }]).map(({ name, heads }) => ({ name, heads })) };
+    const { value } = await Swal.fire({
+        title: trip ? "모임 수정" : "모임 추가",
+        html: `<div class="text-left text-sm">
+            ${fieldLabel("모임 이름")}
+            <input id="t_name" class="swal2-input !m-0 !w-full" value="${esc(base.name)}" placeholder="예: 12월 가족여행" />
+            <div class="grid grid-cols-2 gap-2">
+                <div>${fieldLabel("시작일")}<input id="t_start" type="date" class="swal2-input !m-0 !w-full" value="${base.start || ""}" /></div>
+                <div>${fieldLabel("종료일")}<input id="t_end" type="date" class="swal2-input !m-0 !w-full" value="${base.end || ""}" /></div>
+            </div>
+            ${fieldLabel("나누는 기준")}
+            <select id="t_mode" class="swal2-input !m-0 !w-full !flex">${Object.entries(SPLIT_MODES).map(([k, v]) => `<option value="${k}" ${k === base.splitMode ? "selected" : ""}>${v}</option>`).join("")}</select>
+            <p class="text-xs text-slate-400 mt-1">참가 단위별 균등 = 아래 한 줄마다 같은 금액 · 인원수 비례 = 인원수만큼 부담</p>
+            <div class="flex items-center justify-between gap-2 mt-4 mb-1">
+                <span class="font-medium text-slate-600">참가자 <span class="text-xs font-normal text-slate-400">(첫 줄 = 본인 · 가족은 한 줄에 인원수, 개인은 한 사람씩 1명)</span></span>
+                <button type="button" onclick="addMemberRow()" class="text-indigo-600 text-xs hover:underline shrink-0">+ 추가</button>
+            </div>
+            <div id="tmList">${base.members.map((m) => memberRowHtml(m)).join("")}</div>
+        </div>`,
+        ...SAVE_DIALOG,
+        preConfirm: () => {
+            const v = {
+                name: document.getElementById("t_name").value.trim(),
+                start: document.getElementById("t_start").value,
+                end: document.getElementById("t_end").value,
+                splitMode: document.getElementById("t_mode").value,
+                members: [...document.querySelectorAll("#tmList .tmRow")]
+                    .map((r) => ({ id: r.dataset.id, name: r.querySelector(".tmName").value.trim(), heads: Number(r.querySelector(".tmHeads").value) || 1 }))
+                    .filter((m) => m.name),
+            };
+            const error = !v.name ? "모임 이름을 입력하세요" : !v.start !== !v.end ? "시작일과 종료일을 함께 입력하세요" : v.start > v.end ? "종료일이 시작일보다 빠릅니다" : "";
+            return validated(error, v);
+        },
+    });
+    return value;
+}
+
+async function saveTrip() {
+    const v = await tripModal();
+    if (!v) return;
+    selectedTripId = (await api("POST", "/api/trips", { ...v, closed: false, items: [] })).id;
+    await reload();
+    toast("success", "모임이 추가되었습니다");
+}
+
+async function editTrip() {
+    const trip = currentTrip();
+    const v = await tripModal(trip);
+    if (!v) return;
+    await putTrip(trip, v);
+    toast("success", "모임이 수정되었습니다");
+}
+
+async function toggleTripClosed() {
+    const trip = currentTrip();
+    await putTrip(trip, { closed: !trip.closed });
+    toast("success", trip.closed ? "마감이 해제되었습니다" : "정산이 마감되었습니다");
+}
+
+async function deleteTrip() {
+    const trip = currentTrip();
+    if (!(await confirmDelete(`경비 ${trip.items.length}건과 정산 내용이 삭제됩니다. 수집된 거래 내역은 유지됩니다.`))) return;
+    await api("DELETE", `/api/trips/${trip.id}`);
+    selectedTripId = null;
+    await reload();
+    toast("success", "모임이 삭제되었습니다");
+}
+
+async function tripItemModal(trip, item) {
+    const sharers = item.shareIds?.length ? item.shareIds : trip.members.map((m) => m.id);
+    const { value, isDenied } = await Swal.fire({
+        title: item.id ? "경비 수정" : "경비 추가",
+        html: `<div class="text-left text-sm">
+            ${fieldLabel("내용")}
+            <input id="ti_title" class="swal2-input !m-0 !w-full" value="${esc(item.title)}" placeholder="예: 저녁 식사" />
+            <div class="grid grid-cols-2 gap-2">
+                <div>${fieldLabel("날짜")}<input id="ti_at" type="date" class="swal2-input !m-0 !w-full" value="${item.at || ""}" /></div>
+                <div>${fieldLabel("금액")}<input id="ti_amount" type="text" inputmode="numeric" class="swal2-input !m-0 !w-full text-right" value="${comma(item.amount ?? "")}" oninput="formatMoneyInput(this)" /></div>
+            </div>
+            ${fieldLabel("결제한 사람")}
+            <select id="ti_payer" class="swal2-input !m-0 !w-full !flex">
+                <option value="">미지정</option>
+                ${trip.members.map((m) => `<option value="${m.id}" ${m.id === item.payerId ? "selected" : ""}>${esc(m.name)}</option>`).join("")}
+            </select>
+            ${fieldLabel("부담 대상")}
+            <div class="flex flex-wrap gap-x-4 gap-y-1">
+                ${trip.members.map((m) => `<label class="inline-flex items-center gap-1.5 cursor-pointer"><input type="checkbox" class="tiShare w-4 h-4 accent-indigo-600" value="${m.id}" ${sharers.includes(m.id) ? "checked" : ""} /> ${esc(m.name)}</label>`).join("") || `<span class="text-xs text-slate-400">등록된 참가자가 없습니다.</span>`}
+            </div>
+            ${fieldLabel("메모")}
+            <input id="ti_memo" class="swal2-input !m-0 !w-full" value="${esc(item.memo)}" />
+        </div>`,
+        ...SAVE_DIALOG,
+        showDenyButton: !!item.id,
+        denyButtonText: "삭제",
+        denyButtonColor: "#dc2626",
+        preConfirm: () => {
+            const picked = [...document.querySelectorAll(".tiShare:checked")].map((c) => c.value);
+            const v = {
+                title: document.getElementById("ti_title").value.trim(),
+                at: document.getElementById("ti_at").value,
+                amount: toNum(document.getElementById("ti_amount").value),
+                payerId: document.getElementById("ti_payer").value,
+                shareIds: picked.length === trip.members.length ? [] : picked,
+                memo: document.getElementById("ti_memo").value.trim(),
+            };
+            const error = !v.title || !v.amount ? "내용과 금액을 입력하세요" : trip.members.length && !picked.length ? "부담 대상을 1곳 이상 선택하세요" : "";
+            return validated(error, v);
+        },
+    });
+    return isDenied ? { remove: true } : value;
+}
+
+async function addTripItem() {
+    const trip = currentTrip();
+    const v = await tripItemModal(trip, { at: trip.start || stampNow().slice(0, 10), payerId: trip.members[0]?.id });
+    if (!v) return;
+    await putTrip(trip, { items: [...trip.items, v] });
+    toast("success", "경비가 추가되었습니다");
+}
+
+async function editTripItem(id) {
+    const trip = currentTrip();
+    const v = await tripItemModal(trip, trip.items.find((i) => i.id === id));
+    if (!v || (v.remove && !(await confirmDelete("이 경비를 모임에서 뺍니다. 수집된 거래 내역은 유지됩니다.")))) return;
+    await putTrip(trip, { items: v.remove ? trip.items.filter((i) => i.id !== id) : trip.items.map((i) => (i.id === id ? { ...i, ...v } : i)) });
+    toast("success", v.remove ? "경비가 삭제되었습니다" : "경비가 수정되었습니다");
+}
+
+const txToItem = (trip, t) => ({ txId: t.id, at: String(t.at).slice(0, 10), title: t.title, amount: Math.abs(t.amount), payerId: trip.members[0]?.id || "", shareIds: [], memo: "" });
+
+async function importTripTx() {
+    const trip = currentTrip();
+    if (!trip.start) return toast("info", "모임 수정에서 기간을 먼저 입력하세요");
+    const linked = tripLinks();
+    const txs = (await api("GET", `/api/transactions?from=${trip.start}&to=${trip.end}`)).filter((t) => ["카드", "출금", "이체"].includes(t.kind) && t.amount > 0 && !t.inflow && !linked[t.id]);
+    if (!txs.length) return toast("info", "이 기간에 담을 수 있는 거래가 없습니다");
+    const { value: picked } = await Swal.fire({
+        title: "기간 거래 불러오기",
+        html: `<div class="text-left text-sm">
+            <p class="text-xs text-slate-400 mb-2">${tripPeriod(trip)} 카드·출금·이체 ${txs.length}건 — 모임 경비만 선택하세요.</p>
+            <div class="max-h-96 overflow-y-auto pr-1">
+                ${txs.map((t, i) => `<label class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 cursor-pointer">
+                    <input type="checkbox" class="txPick w-4 h-4 accent-indigo-600 shrink-0" value="${i}" />
+                    <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
+                    <span class="flex-1 truncate text-slate-700">${esc(t.title)}</span>
+                    <span class="font-bold tabular-nums shrink-0">${won(t.amount)}</span>
+                </label>`).join("")}
+            </div>
+        </div>`,
+        width: 620,
+        showCancelButton: true,
+        confirmButtonText: "선택한 거래 담기",
+        cancelButtonText: "취소",
+        confirmButtonColor: "#4f46e5",
+        preConfirm: () => [...document.querySelectorAll(".txPick:checked")].map((c) => txs[c.value]),
+    });
+    if (!picked?.length) return;
+    await putTrip(trip, { items: [...trip.items, ...picked.map((t) => txToItem(trip, t))] });
+    toast("success", `${picked.length}건을 담았습니다`);
+}
+
+async function addTxToTrip(t) {
+    const open = DB.trips.filter((x) => !x.closed).reverse();
+    if (!open.length) return toast("info", "모임·여행 탭에서 모임을 먼저 추가하세요");
+    const v = await formModal({
+        title: "모임에 담기",
+        fields: [
+            { name: "tripId", label: "모임", type: "select", options: open.map((x) => ({ value: x.id, label: esc(x.name) })) },
+            { name: "title", label: "내용", required: true },
+            { name: "amount", label: "금액", type: "number", required: true },
+        ],
+        values: { tripId: open.find((x) => x.id === selectedTripId)?.id || open[0].id, title: t.title, amount: Math.abs(t.amount) },
+    });
+    if (!v) return;
+    const trip = DB.trips.find((x) => x.id === v.tripId);
+    await putTrip(trip, { items: [...trip.items, { ...txToItem(trip, t), title: v.title, amount: v.amount }] });
+    drawLedger();
+    toast("success", `${trip.name}에 담았습니다`);
+}
+
 function renderAll() {
     renderBanks();
     renderCards();
     renderFixed();
     renderOverview();
+    renderTrips();
 }
 
 const sumValues = (obj) => Object.values(obj || {}).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -1842,7 +2247,7 @@ async function showTab(name) {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
-    if (name === "ledger" || name === "monthly") await reload();
+    if (["ledger", "monthly", "trips"].includes(name)) await reload();
     if (name === "ledger") renderLedger();
     if (name === "monthly") renderMonthly();
     if (name === "history") renderHistory();
@@ -1856,7 +2261,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
 document.querySelectorAll(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
 
-const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed };
+const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed, trips: saveTrip };
 document.addEventListener("keydown", (e) => {
     if (e.key !== "+" || e.repeat || Swal.isVisible()) return;
     const t = e.target;

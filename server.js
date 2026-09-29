@@ -14,19 +14,20 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const DEFAULT_DATA = { banks: [], cards: [], fixedExpenses: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} };
-const COLLECTIONS = ["banks", "cards", "fixedExpenses"];
+const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
+const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
+    trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
 const ensureDir = (dir) => fs.existsSync(dir) || fs.mkdirSync(dir, { recursive: true });
 const parseJson = (raw) => JSON.parse(raw.charCodeAt(0) === 0xfeff ? raw.slice(1) : raw);
 const isMonth = (m) => /^\d{4}-\d{2}$/.test(m);
-const normalizeData = (data) => ({ ...DEFAULT_DATA, ...data, monthly: undefined });
+const normalizeData = (data) => ({ ...defaultData(), ...data, monthly: undefined });
 
 const fileStore = {
     async init() {
@@ -52,9 +53,9 @@ const fileStore = {
     async readDB() {
         if (!fs.existsSync(DB_PATH)) {
             ensureDir(DATA_DIR);
-            fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_DATA, null, 4));
+            fs.writeFileSync(DB_PATH, JSON.stringify(defaultData(), null, 4));
         }
-        return { ...DEFAULT_DATA, ...parseJson(fs.readFileSync(DB_PATH, "utf-8")) };
+        return { ...defaultData(), ...parseJson(fs.readFileSync(DB_PATH, "utf-8")) };
     },
     async writeDB(data) {
         ensureDir(DATA_DIR);
@@ -120,7 +121,7 @@ const createPgStore = () => {
             await q("CREATE TABLE IF NOT EXISTS transactions (id text PRIMARY KEY, data jsonb NOT NULL)");
             const seeded = await q("SELECT 1 FROM kv WHERE key='db'");
             if (!seeded.rows.length) {
-                let seed = { ...DEFAULT_DATA };
+                let seed = defaultData();
                 if (fs.existsSync(DB_PATH)) seed = normalizeData(parseJson(fs.readFileSync(DB_PATH, "utf-8")));
                 await q("INSERT INTO kv(key, value) VALUES('db', $1)", [JSON.stringify(seed)]);
             }
@@ -142,7 +143,7 @@ const createPgStore = () => {
         },
         async readDB() {
             const { rows } = await q("SELECT value FROM kv WHERE key='db'");
-            return rows.length ? { ...DEFAULT_DATA, ...rows[0].value } : { ...DEFAULT_DATA };
+            return rows.length ? { ...defaultData(), ...rows[0].value } : defaultData();
         },
         async writeDB(data) {
             await q("INSERT INTO kv(key, value) VALUES('db', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [JSON.stringify(data)]);
@@ -221,11 +222,16 @@ const send = (res, status, data) => {
 };
 
 const readRawBody = (req) =>
-    new Promise((resolve) => {
+    (req.rawBody ??= new Promise((resolve, reject) => {
         const chunks = [];
         req.on("data", (c) => chunks.push(c));
         req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    });
+        req.on("error", reject);
+        req.on("close", () => reject(new Error("요청이 중단되었습니다")));
+    }));
+
+let writeQueue = Promise.resolve();
+const serialize = (task) => (writeQueue = writeQueue.catch(() => {}).then(task));
 
 const readBody = async (req) => {
     try {
@@ -256,6 +262,32 @@ const normalize = (collection, body) => {
         }
     }
     if (collection === "fixedExpenses" && data.amount != null) data.amount = Number(data.amount) || 0;
+    if (collection === "trips") {
+        const list = (v) => (Array.isArray(v) ? v : []);
+        const day = (v) => (/^\d{4}-\d{2}-\d{2}/.test(String(v)) ? String(v).slice(0, 10) : "");
+        if ("name" in data) data.name = String(data.name || "").trim();
+        if ("start" in data) data.start = day(data.start);
+        if ("end" in data) data.end = day(data.end);
+        if ("splitMode" in data) data.splitMode = data.splitMode === "head" ? "head" : "team";
+        if ("closed" in data) data.closed = !!data.closed;
+        if ("members" in data)
+            data.members = list(data.members)
+                .map((m) => ({ id: String(m?.id || genId()), name: String(m?.name || "").trim(), heads: Math.max(1, Math.round(Number(m?.heads)) || 1) }))
+                .filter((m) => m.name);
+        if ("items" in data)
+            data.items = list(data.items)
+                .map((i) => ({
+                    id: String(i?.id || genId()),
+                    txId: String(i?.txId || ""),
+                    at: day(i?.at),
+                    title: String(i?.title || "").trim(),
+                    amount: Math.round(Number(i?.amount)) || 0,
+                    payerId: String(i?.payerId || ""),
+                    shareIds: list(i?.shareIds).map(String),
+                    memo: String(i?.memo || ""),
+                }))
+                .filter((i) => i.title && i.amount);
+    }
     return data;
 };
 
@@ -324,6 +356,7 @@ const deploy = async (message) => {
 
 const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권|브리핑|최저가|전망|동향/;
 const TX_RE = /입금|출금|이체|송금|결제|승인|충전|인출|납부|환불|취소|예정|내일|보냈|받았|냈어|냈습|갚|나갔|나갈|빠져|썼어/;
+const AUTOPAY_RE = /자동납부/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
 const kstNow = () => {
@@ -487,20 +520,22 @@ const handleIngest = async (req, res) => {
             d.setUTCMinutes(d.getUTCMinutes() + min);
             return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}`;
         };
-        const recent = await store.listTransactionsRange(shift(-3), shift(3));
+        const autoPay = !!tx.cardId && AUTOPAY_RE.test(tx.raw);
+        const from = shift(-3);
+        const lastDay = await store.listTransactionsRange(autoPay ? shift(-1440) : from, shift(3));
+        const recent = lastDay.filter((o) => String(o.at) >= from);
         if (tx.kind === "카드" || tx.kind === "해외") {
-            const dup = recent.find(
-                (o) =>
-                    o.kind === tx.kind &&
-                    (tx.kind === "해외" ? o.currency === tx.currency && o.fxAmount === tx.fxAmount : o.amount === tx.amount) &&
-                    (o.cardId === tx.cardId || o.bankId === tx.bankId)
-            );
-            if (dup) skipStore = true;
+            const same = (o) => o.kind === tx.kind && (tx.kind === "해외" ? o.currency === tx.currency && o.fxAmount === tx.fxAmount : o.amount === tx.amount);
+            skipStore =
+                recent.some((o) => same(o) && (o.cardId === tx.cardId || o.bankId === tx.bankId)) ||
+                (autoPay && lastDay.some((o) => same(o) && o.cardId === tx.cardId && AUTOPAY_RE.test(o.raw)));
         } else if (tx.bankId) {
+            if (tx.balance != null && recent.some((o) => o.raw === tx.raw)) return send(res, 200, { ok: true, dedup: true });
             const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
             if (dup) {
                 if (tx.balance == null) return send(res, 200, { ok: true, dedup: true });
                 await store.deleteTransaction(dup.id);
+                tx.id = dup.id;
                 dedupForce = true;
             }
         }
@@ -716,21 +751,27 @@ const serveStatic = (req, res, urlPath) => {
     fs.createReadStream(filePath).pipe(res);
 };
 
+const route = async (req, res, urlPath) => {
+    if (urlPath === "/api/login" || urlPath === "/api/logout") return handleAuth(req, res, urlPath.split("/")[2]);
+    if (urlPath === "/api/ingest") return handleIngest(req, res);
+    if (urlPath.startsWith("/api/")) {
+        if (!isAuthed(req) && !(urlPath.startsWith("/api/transactions") && ingestAuthed(req))) return send(res, 401, { error: "로그인이 필요합니다" });
+        if (urlPath.startsWith("/api/system/")) return handleSystem(req, res, urlPath.split("/")[3]);
+        return handleApi(req, res, urlPath.split("/").slice(1));
+    }
+    if ((urlPath === "/" || urlPath === "/index.html") && !isAuthed(req)) {
+        res.writeHead(302, { Location: "/login.html" });
+        return res.end();
+    }
+    serveStatic(req, res, urlPath);
+};
+
 const server = http.createServer(async (req, res) => {
     try {
         const urlPath = req.url.split("?")[0];
-        if (urlPath === "/api/login" || urlPath === "/api/logout") return await handleAuth(req, res, urlPath.split("/")[2]);
-        if (urlPath === "/api/ingest") return await handleIngest(req, res);
-        if (urlPath.startsWith("/api/")) {
-            if (!isAuthed(req) && !(urlPath.startsWith("/api/transactions") && ingestAuthed(req))) return send(res, 401, { error: "로그인이 필요합니다" });
-            if (urlPath.startsWith("/api/system/")) return await handleSystem(req, res, urlPath.split("/")[3]);
-            return await handleApi(req, res, urlPath.split("/").slice(1));
-        }
-        if ((urlPath === "/" || urlPath === "/index.html") && !isAuthed(req)) {
-            res.writeHead(302, { Location: "/login.html" });
-            return res.end();
-        }
-        serveStatic(req, res, urlPath);
+        if (req.method === "GET") return await route(req, res, urlPath);
+        await readRawBody(req);
+        await serialize(() => route(req, res, urlPath));
     } catch (err) {
         send(res, 500, { error: err.message });
     }
