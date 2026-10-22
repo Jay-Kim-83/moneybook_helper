@@ -357,6 +357,9 @@ const deploy = async (message) => {
 
 const AD_RE = /복권|응모|추첨|이벤트|쿠폰|광고|캐시백|걸음|혜택|당첨|받아가|받아보|받아요|누르면|사라져요|확인해|모아보|보상|포인트|출석|퀴즈|무료|가입|추천|알아보|무이자|증권|브리핑|최저가|전망|동향/;
 const TX_RE = /입금|출금|이체|송금|결제|승인|충전|인출|납부|환불|취소|예정|내일|보냈|받았|냈어|냈습|갚|나갔|나갈|빠져|썼어/;
+const MONEY_RE = /\d{1,3}(?:,\d{3})+|[1-9]\d*\s*원/;
+const hasTxWord = (t) => TX_RE.test(t.replace(/대출/g, ""));
+const looksLikeTx = (t) => hasTxWord(t) && MONEY_RE.test(t);
 const AUTOPAY_RE = /자동납부/;
 const parseNum = (s) => Number(String(s).replace(/,/g, "")) || 0;
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -380,7 +383,7 @@ const parseSms = (sender, text, db) => {
     } else if ((m = noBal.match(/(입금|출금)\s+([\d,]+)/))) {
         amount = parseNum(m[2]);
         kind = m[1] === "입금" ? "입금" : "출금";
-    } else if ((m = noBal.match(/([\d,]+)\s*원/)) && parseNum(m[1]) && TX_RE.test(noBal.replace(/대출/g, ""))) {
+    } else if ((m = noBal.match(/([\d,]+)\s*원/)) && parseNum(m[1]) && hasTxWord(noBal)) {
         amount = parseNum(m[1]);
         kind = /입금|충전/.test(noBal) ? "입금" : "출금";
         weak = true;
@@ -391,8 +394,9 @@ const parseSms = (sender, text, db) => {
         if (/취소/.test(t)) fxAmount = -fxAmount;
         kind = "해외";
     }
-    if (amount === null && kind !== "해외" && AD_RE.test(sender + " " + t) && !weak) return null;
-    if (weak && AD_RE.test(sender + " " + t)) return null;
+    const ad = AD_RE.test(sender + " " + t);
+    if (amount === null && kind !== "해외" && (ad || !looksLikeTx(t))) return null;
+    if (weak && ad) return null;
     if (amount === null && /누적이용금액/.test(t)) return null;
     if (amount === null && /인증\s?번호|인증\s?코드|본인\s?확인|OTP/i.test(t)) return null;
     if (amount !== null && /예정|내일/.test(noBal)) kind = "안내";
@@ -459,8 +463,6 @@ const parseSms = (sender, text, db) => {
     if (kind === "출금" && balance === null && card && /결제/.test(noBal)) kind = "카드";
     if ((kind === "카드" || kind === "해외") && card?.bankId) bankId = card.bankId;
 
-    if (amount === null && !bankId && !card && !/(?:\d{1,3}(?:,\d{3})+|\d{4,})/.test(t)) return null;
-
     return {
         kind: amount === null && kind !== "해외" ? "미분류" : kind,
         amount,
@@ -483,6 +485,22 @@ const bearerToken = (req) => {
 };
 
 const ingestAuthed = (req) => !!ingestKey && safeEqual(bearerToken(req), ingestKey);
+
+const applyBalance = (db, tx, force = false) => {
+    if (!tx.bankId || tx.status !== "ok") return false;
+    db.currentBalances = db.currentBalances || {};
+    const cur = db.currentBalances[tx.bankId];
+    if (tx.balance != null) {
+        const chained = cur && tx.balance === cur.amount + (tx.inflow ? tx.amount : -(tx.amount || 0));
+        const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && (chained || cur.est)) || (force && cur.est);
+        if (!newer) return false;
+        db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur && String(cur.at) > String(tx.at) ? cur.at : tx.at };
+        return true;
+    }
+    if (tx.amount == null || !["입금", "출금", "이체"].includes(tx.kind) || !cur || String(tx.at) < String(cur.at)) return false;
+    db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.inflow ? tx.amount : -tx.amount), at: tx.at, est: true };
+    return true;
+};
 
 const handleIngest = async (req, res) => {
     if (req.method !== "POST") return send(res, 405, { error: "POST 전용" });
@@ -542,23 +560,7 @@ const handleIngest = async (req, res) => {
         }
     }
     if (!skipStore) await store.addTransaction(tx);
-    let dirty = false;
-    if (tx.bankId && tx.balance != null && tx.status === "ok") {
-        db.currentBalances = db.currentBalances || {};
-        const cur = db.currentBalances[tx.bankId];
-        const chained = cur && tx.balance === cur.amount + (tx.inflow ? tx.amount : -(tx.amount || 0));
-        const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && (chained || cur.est)) || (dedupForce && cur.est);
-        if (newer) {
-            db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur && String(cur.at) > String(tx.at) ? cur.at : tx.at };
-            dirty = true;
-        }
-    } else if (tx.bankId && tx.balance == null && tx.status === "ok" && tx.amount != null && ["입금", "출금", "이체"].includes(tx.kind)) {
-        const cur = db.currentBalances?.[tx.bankId];
-        if (cur && String(tx.at) >= String(cur.at)) {
-            db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.inflow ? tx.amount : -tx.amount), at: tx.at, est: true };
-            dirty = true;
-        }
-    }
+    let dirty = applyBalance(db, tx, dedupForce);
     if (tx.cardId && tx.status === "ok") {
         db.cardStats = db.cardStats || {};
         const s = (db.cardStats[tx.cardId] = db.cardStats[tx.cardId] || {});
@@ -572,7 +574,7 @@ const handleIngest = async (req, res) => {
         }
     }
     if (dirty) await store.writeDB(db);
-    send(res, 200, { ok: true, ...(skipStore ? { dedup: true } : {}), alert: !skipStore && tx.status === "pending" && TX_RE.test(tx.raw.replace(/대출/g, "")) && /\d{1,3}(?:,\d{3})+|\d\s*원/.test(tx.raw), transaction: tx });
+    send(res, 200, { ok: true, ...(skipStore ? { dedup: true } : {}), alert: tx.status === "pending", transaction: tx });
 };
 
 const handleAuth = async (req, res, action) => {
@@ -661,6 +663,30 @@ const handleApi = async (req, res, parts) => {
             const from = p.get("from"), to = p.get("to");
             if (from && to) return send(res, 200, await store.listTransactionsRange(from, to));
             return send(res, 200, await store.listTransactions(p.get("month") || ""));
+        }
+        if (method === "POST") {
+            const b = await readBody(req);
+            const amount = Math.round(Number(b.amount)) || 0;
+            const balance = b.kind === "카드" || b.balance == null ? null : Math.round(Number(b.balance));
+            if (!["입금", "출금", "카드"].includes(b.kind) || amount <= 0 || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(String(b.at)) || Number.isNaN(balance))
+                return send(res, 400, { error: "일시·구분·금액을 확인하세요" });
+            const db = await store.readDB();
+            const cardObj = b.kind === "카드" ? db.cards.find((c) => c.id === b.cardId) : null;
+            const tx = {
+                id: genId(),
+                kind: b.kind,
+                amount,
+                title: String(b.title || "").trim() || b.kind,
+                bankId: cardObj ? cardObj.bankId || null : db.banks.find((x) => x.id === b.bankId)?.id || null,
+                cardId: cardObj?.id || null,
+                balance,
+                inflow: b.kind === "입금",
+                at: b.at,
+                status: "ok",
+                manual: true,
+            };
+            await Promise.all([store.addTransaction(tx), applyBalance(db, tx) && store.writeDB(db)]);
+            return send(res, 200, { transaction: tx, currentBalance: db.currentBalances?.[tx.bankId] || null });
         }
         if (method === "DELETE") {
             if (id) {

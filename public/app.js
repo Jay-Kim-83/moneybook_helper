@@ -678,7 +678,7 @@ function bankTxModal(bankId) {
                   return `<div title="${String(t.raw || "").replace(/"/g, "&quot;").slice(0, 200)}" class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 text-left">
                 <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
-                <span class="flex-1 text-sm text-slate-700 truncate">${t.title}</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${esc(t.title)}</span>
                 ${t.balance != null ? `<span class="text-[11px] text-sky-500 shrink-0">잔액 ${won(t.balance)}</span>` : ""}
                 <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
             </div>`;
@@ -716,8 +716,7 @@ function cyclePeriod(anchor, day) {
     };
 }
 
-function currentAnchor(day) {
-    const now = new Date();
+function currentAnchor(day, now = new Date()) {
     let y = now.getFullYear(), m = now.getMonth() + 1;
     if (now.getDate() < day) {
         m -= 1;
@@ -964,7 +963,7 @@ function drawLedger() {
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
-                <span class="flex-1 text-sm text-slate-700 truncate">${t.title}
+                <span class="flex-1 text-sm text-slate-700 truncate">${t.manual ? "✍️ " : ""}${esc(t.title)}
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                     ${links[t.id] ? `<span class="text-xs text-teal-600">🧳 ${esc(links[t.id])}</span>` : ""}
@@ -980,12 +979,13 @@ function drawLedger() {
     document.getElementById("tab-ledger").innerHTML = `
         <div class="flex flex-wrap items-center justify-between gap-3 mb-5">
             <h2 class="text-lg font-bold text-slate-700">잔액·거래</h2>
-            <div class="flex items-center gap-1.5">
+            <div class="flex flex-wrap items-center gap-1.5">
                 <button onclick="moveLedger(-1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">◀</button>
-                <span class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums">${periodLabel}</span>
+                <span class="px-3 py-1.5 rounded-lg bg-white border border-slate-300 text-sm font-medium text-slate-700 tabular-nums whitespace-nowrap">${periodLabel}</span>
                 <button onclick="moveLedger(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
                 <button onclick="setCycleDay()" title="기준일 설정 (현재 매월 ${cycleDay()}일 시작)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">⚙</button>
                 <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑️</button>
+                <button onclick="addLedgerTx()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition whitespace-nowrap">+ 거래 추가</button>
             </div>
         </div>
         <div class="grid grid-cols-1 gap-4">
@@ -1042,11 +1042,13 @@ async function showTxRaw(i) {
     if (!t) return;
     const linked = tripLinks()[t.id];
     const { isDenied, dismiss } = await Swal.fire({
-        title: t.title,
+        title: esc(t.title),
         html: `<div class="text-left text-sm">
             <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.kind === "해외" && t.fxAmount != null ? ` · ${t.currency} ${t.fxAmount}` : ""}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
-            <pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${t.raw || "(원문 없음)"}</pre>
-            <p class="text-xs text-slate-400 mt-2">발신: ${t.sender || "-"}</p>
+            ${t.manual
+                ? `<p class="text-xs text-slate-500">✍️ 직접 입력한 거래입니다.</p>`
+                : `<pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${esc(t.raw || "(원문 없음)")}</pre>
+            <p class="text-xs text-slate-400 mt-2">발신: ${esc(t.sender || "-")}</p>`}
             ${linked ? `<p class="text-xs text-teal-600 mt-2">🧳 ${esc(linked)}에 담긴 거래입니다.</p>` : ""}
         </div>`,
         confirmButtonText: "닫기",
@@ -1065,6 +1067,62 @@ async function showTxRaw(i) {
         toast("success", "거래가 삭제되었습니다");
         renderLedger();
     }
+}
+
+const txSourceOptions = (kind) =>
+    (kind === "카드"
+        ? DB.cards.map((c) => `<option value="${c.id}">💳 ${esc(c.company)}${c.alias ? ` (${esc(c.alias)})` : ""}</option>`)
+        : DB.banks.map((b) => `<option value="${b.id}">🏦 ${esc(b.name)}</option>`)
+    ).join("");
+
+async function addLedgerTx() {
+    const { value } = await Swal.fire({
+        title: "거래 직접 추가",
+        html: `<div class="text-left text-sm">
+            <div class="grid grid-cols-2 gap-2">
+                <div>${fieldLabel("일시")}<input id="lt_at" type="datetime-local" class="swal2-input !m-0 !w-full" value="${stampNow().replace(" ", "T")}" /></div>
+                <div>${fieldLabel("구분")}<select id="lt_kind" class="swal2-input !m-0 !w-full !flex">${["출금", "입금", "카드"].map((k) => `<option>${k}</option>`).join("")}</select></div>
+            </div>
+            ${fieldLabel("은행·카드")}
+            <select id="lt_src" class="swal2-input !m-0 !w-full !flex">${txSourceOptions("출금")}</select>
+            <div class="grid grid-cols-2 gap-2">
+                <div>${fieldLabel("금액")}${moneyInput("lt_amount")}</div>
+                <div id="lt_balWrap">${fieldLabel("거래 후 잔액 (선택)")}${moneyInput("lt_balance")}</div>
+            </div>
+            ${fieldLabel("내용")}
+            <input id="lt_title" class="swal2-input !m-0 !w-full" placeholder="예: 김수연 송금" />
+            <p class="text-xs text-slate-400 mt-2">잔액을 적으면 그 값으로, 비우면 현재 잔액에서 더하거나 빼서 반영합니다. 이 일시 뒤에 잔액이 이미 갱신됐으면 잔액은 바꾸지 않습니다.</p>
+        </div>`,
+        ...SAVE_DIALOG,
+        didOpen: () => {
+            const kind = document.getElementById("lt_kind");
+            kind.onchange = () => {
+                document.getElementById("lt_src").innerHTML = txSourceOptions(kind.value);
+                document.getElementById("lt_balWrap").classList.toggle("invisible", kind.value === "카드");
+            };
+        },
+        preConfirm: () => {
+            const val = (id) => document.getElementById(id).value.trim();
+            const kind = val("lt_kind");
+            const src = val("lt_src");
+            const v = {
+                at: val("lt_at").replace("T", " "),
+                kind,
+                amount: toNum(val("lt_amount")),
+                balance: val("lt_balance") ? toNum(val("lt_balance")) : null,
+                title: val("lt_title"),
+                [kind === "카드" ? "cardId" : "bankId"]: src,
+            };
+            const error = !v.at ? "일시를 입력하세요" : !src ? "은행·카드를 먼저 등록하세요" : !(v.amount > 0) ? "금액을 입력하세요" : "";
+            return validated(error, v);
+        },
+    });
+    if (!value) return;
+    const { transaction, currentBalance } = await api("POST", "/api/transactions", value);
+    if (currentBalance) DB.currentBalances = { ...DB.currentBalances, [transaction.bankId]: currentBalance };
+    ledgerMonth = currentAnchor(cycleDay(), new Date(value.at.replace(" ", "T")));
+    await renderLedger();
+    toast("success", "거래가 추가되었습니다");
 }
 
 const prevMonth = (ym) => {
@@ -1527,6 +1585,8 @@ const itemNote = (trip, item) => {
 
 const fieldLabel = (text) => `<label class="block font-medium text-slate-600 mt-3 mb-1">${text}</label>`;
 
+const moneyInput = (id, value = "") => `<input id="${id}" type="text" inputmode="numeric" class="swal2-input !m-0 !w-full text-right" value="${comma(value)}" oninput="formatMoneyInput(this)" />`;
+
 function settleTrip(trip) {
     const weight = (m) => (trip.splitMode === "head" ? m.heads : 1);
     const rows = trip.members.map((m) => ({ ...m, paid: 0, owed: 0 }));
@@ -1804,7 +1864,7 @@ async function tripItemModal(trip, item) {
             <input id="ti_title" class="swal2-input !m-0 !w-full" value="${esc(item.title)}" placeholder="예: 저녁 식사" />
             <div class="grid grid-cols-2 gap-2">
                 <div>${fieldLabel("날짜")}<input id="ti_at" type="date" class="swal2-input !m-0 !w-full" value="${item.at || ""}" /></div>
-                <div>${fieldLabel("금액")}<input id="ti_amount" type="text" inputmode="numeric" class="swal2-input !m-0 !w-full text-right" value="${comma(item.amount ?? "")}" oninput="formatMoneyInput(this)" /></div>
+                <div>${fieldLabel("금액")}${moneyInput("ti_amount", item.amount ?? "")}</div>
             </div>
             ${fieldLabel("결제한 사람")}
             <select id="ti_payer" class="swal2-input !m-0 !w-full !flex">
