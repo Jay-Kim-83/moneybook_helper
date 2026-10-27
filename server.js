@@ -111,7 +111,7 @@ const fileStore = {
 
 const createPgStore = () => {
     const { Pool } = require("pg");
-    const ssl = /sslmode=disable/.test(DATABASE_URL) ? false : { rejectUnauthorized: false };
+    const ssl = !/sslmode=disable/.test(DATABASE_URL);
     const pool = new Pool({ connectionString: DATABASE_URL, ssl });
     pool.on("error", (err) => console.error("DB 유휴 연결 끊김 (자동 재연결):", err.message));
     const q = (text, params) => pool.query(text, params);
