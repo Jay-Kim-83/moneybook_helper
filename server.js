@@ -103,6 +103,15 @@ const fileStore = {
         const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
         fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all.filter((t) => t.id !== id), null, 4));
     },
+    async updateTransaction(id, patch) {
+        if (!fs.existsSync(TRANSACTIONS_PATH)) return null;
+        const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
+        const tx = all.find((t) => t.id === id);
+        if (!tx) return null;
+        Object.assign(tx, patch);
+        fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all, null, 4));
+        return tx;
+    },
     async clearTransactions() {
         ensureDir(DATA_DIR);
         fs.writeFileSync(TRANSACTIONS_PATH, "[]");
@@ -177,6 +186,10 @@ const createPgStore = () => {
         },
         async deleteTransaction(id) {
             await q("DELETE FROM transactions WHERE id = $1", [id]);
+        },
+        async updateTransaction(id, patch) {
+            const { rows } = await q("UPDATE transactions SET data = data || $2::jsonb WHERE id = $1 RETURNING data", [id, JSON.stringify(patch)]);
+            return rows[0]?.data || null;
         },
         async clearTransactions() {
             await q("DELETE FROM transactions");
@@ -553,13 +566,13 @@ const handleIngest = async (req, res) => {
             const dup = recent.find((o) => o.bankId === tx.bankId && o.kind === tx.kind && o.amount === tx.amount && (o.balance == null) !== (tx.balance == null));
             if (dup) {
                 if (tx.balance == null) return send(res, 200, { ok: true, dedup: true });
-                await store.deleteTransaction(dup.id);
                 tx.id = dup.id;
                 dedupForce = true;
             }
         }
     }
-    if (!skipStore) await store.addTransaction(tx);
+    if (dedupForce) await store.updateTransaction(tx.id, tx);
+    else if (!skipStore) await store.addTransaction(tx);
     let dirty = applyBalance(db, tx, dedupForce);
     if (tx.cardId && tx.status === "ok") {
         db.cardStats = db.cardStats || {};
@@ -687,6 +700,11 @@ const handleApi = async (req, res, parts) => {
             };
             await Promise.all([store.addTransaction(tx), applyBalance(db, tx) && store.writeDB(db)]);
             return send(res, 200, { transaction: tx, currentBalance: db.currentBalances?.[tx.bankId] || null });
+        }
+        if (method === "PUT" && id) {
+            const b = await readBody(req);
+            const tx = await store.updateTransaction(id, { memo: String(b.memo || "").trim() });
+            return tx ? send(res, 200, tx) : send(res, 404, { error: "거래를 찾을 수 없습니다" });
         }
         if (method === "DELETE") {
             if (id) {

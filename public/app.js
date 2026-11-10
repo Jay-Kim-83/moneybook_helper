@@ -39,6 +39,10 @@ function formatMoneyInput(el) {
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
+const txName = (t) => t.memo || t.title;
+
+const txLabel = (t) => (t.memo ? "📝 " : "") + esc(txName(t));
+
 async function copyText(text, done = "복사되었습니다") {
     try {
         await navigator.clipboard.writeText(text);
@@ -678,7 +682,7 @@ function bankTxModal(bankId) {
                   return `<div title="${String(t.raw || "").replace(/"/g, "&quot;").slice(0, 200)}" class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 text-left">
                 <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
-                <span class="flex-1 text-sm text-slate-700 truncate">${esc(t.title)}</span>
+                <span class="flex-1 text-sm text-slate-700 truncate">${txLabel(t)}</span>
                 ${t.balance != null ? `<span class="text-[11px] text-sky-500 shrink-0">잔액 ${won(t.balance)}</span>` : ""}
                 <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
             </div>`;
@@ -963,7 +967,7 @@ function drawLedger() {
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
-                <span class="flex-1 text-sm text-slate-700 truncate">${t.manual ? "✍️ " : ""}${esc(t.title)}
+                <span class="flex-1 text-sm text-slate-700 truncate">${t.manual ? "✍️ " : ""}${txLabel(t)}
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                     ${links[t.id] ? `<span class="text-xs text-teal-600">🧳 ${esc(links[t.id])}</span>` : ""}
@@ -1045,6 +1049,8 @@ async function showTxRaw(i) {
         title: esc(t.title),
         html: `<div class="text-left text-sm">
             <p class="text-slate-500 mb-2">${t.at} · ${t.kind}${t.kind === "해외" && t.fxAmount != null ? ` · ${t.currency} ${t.fxAmount}` : ""}${t.amount != null ? ` · ${won(t.amount)}` : ""}${t.balance != null ? ` · 잔액 ${won(t.balance)}` : ""}${t.status === "pending" ? ' · <b class="text-amber-600">미분류(pending)</b>' : ""}</p>
+            <p class="mb-2 text-slate-700">📝 ${t.memo ? esc(t.memo) : '<span class="text-slate-400">메모 없음</span>'}
+                <button onclick="editTxMemo(${i})" class="ml-1 text-xs text-indigo-600 hover:underline">수정</button></p>
             ${t.manual
                 ? `<p class="text-xs text-slate-500">✍️ 직접 입력한 거래입니다.</p>`
                 : `<pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${esc(t.raw || "(원문 없음)")}</pre>
@@ -1067,6 +1073,16 @@ async function showTxRaw(i) {
         toast("success", "거래가 삭제되었습니다");
         renderLedger();
     }
+}
+
+async function editTxMemo(i) {
+    const t = window._ledgerTx?.[i];
+    if (!t) return;
+    const v = await formModal({ title: "📝 메모", fields: [{ name: "memo", label: "메모" }], values: t });
+    if (!v) return;
+    Object.assign(t, await api("PUT", `/api/transactions/${t.id}`, v));
+    toast("success", "메모가 저장되었습니다");
+    drawLedger();
 }
 
 const txSourceOptions = (kind) =>
@@ -1914,7 +1930,7 @@ async function editTripItem(id) {
     toast("success", v.remove ? "경비가 삭제되었습니다" : "경비가 수정되었습니다");
 }
 
-const txToItem = (trip, t) => ({ txId: t.id, at: String(t.at).slice(0, 10), title: t.title, amount: Math.abs(t.amount), payerId: meOf(trip.members)?.id || "", shareIds: [], memo: "" });
+const txToItem = (trip, t) => ({ txId: t.id, at: String(t.at).slice(0, 10), title: txName(t), amount: Math.abs(t.amount), payerId: meOf(trip.members)?.id || "", shareIds: [], memo: "" });
 
 async function importTripTx() {
     const trip = currentTrip();
@@ -1930,7 +1946,7 @@ async function importTripTx() {
                 ${txs.map((t, i) => `<label class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 cursor-pointer">
                     <input type="checkbox" class="txPick w-4 h-4 accent-indigo-600 shrink-0" value="${i}" />
                     <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
-                    <span class="flex-1 truncate text-slate-700">${esc(t.title)}</span>
+                    <span class="flex-1 truncate text-slate-700">${txLabel(t)}</span>
                     <span class="font-bold tabular-nums shrink-0">${won(t.amount)}</span>
                 </label>`).join("")}
             </div>
@@ -1957,7 +1973,7 @@ async function addTxToTrip(t) {
             { name: "title", label: "내용", required: true },
             { name: "amount", label: "금액", type: "number", required: true },
         ],
-        values: { tripId: open.find((x) => x.id === selectedTripId)?.id || open[0].id, title: t.title, amount: Math.abs(t.amount) },
+        values: { tripId: open.find((x) => x.id === selectedTripId)?.id || open[0].id, title: txName(t), amount: Math.abs(t.amount) },
     });
     if (!v) return;
     const trip = DB.trips.find((x) => x.id === v.tripId);
