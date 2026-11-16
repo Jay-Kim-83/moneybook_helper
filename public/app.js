@@ -76,14 +76,15 @@ const SAVE_DIALOG = { focusConfirm: false, showCancelButton: true, confirmButton
 
 const validated = (error, value) => (error ? (Swal.showValidationMessage(error), false) : value);
 
+const optionTags = (options, value) => options.map((o) => `<option value="${o.value}" ${o.value === value ? "selected" : ""}>${o.label}</option>`).join("");
+
 const formModal = async ({ title, fields, values = {} }) => {
     const html = fields
         .map((f) => {
             const v = values[f.name] ?? "";
             const label = `<label class="block text-left text-sm font-medium text-slate-600 mt-3 mb-1">${f.label}</label>`;
             if (f.type === "select") {
-                const opts = f.options.map((o) => `<option value="${o.value}" ${o.value === v ? "selected" : ""}>${o.label}</option>`).join("");
-                return `${label}<select id="f_${f.name}" class="swal2-input !m-0 !w-full !flex">${opts}</select>`;
+                return `${label}<select id="f_${f.name}" class="swal2-input !m-0 !w-full !flex">${optionTags(f.options, v)}</select>`;
             }
             if (f.type === "number") {
                 return `${label}<input id="f_${f.name}" type="text" inputmode="numeric" value="${comma(v)}" placeholder="${f.label}" oninput="formatMoneyInput(this)" class="swal2-input !m-0 !w-full" />`;
@@ -2007,9 +2008,49 @@ const telLink = (phone) => (phone ? `<a href="tel:${esc(phone)}" class="text-ind
 
 const searchKey = (s) => String(s).toLowerCase().replace(/[\s-]/g, "");
 
-const byName = (a, b) => a.name.localeCompare(b.name, "ko");
+const koCompare = new Intl.Collator("ko").compare;
+
+const byName = (a, b) => koCompare(a.name, b.name);
 
 const excelButton = (onClick) => outlineButton("📥 엑셀", onClick, "border-emerald-600 text-emerald-700 hover:bg-emerald-50");
+
+const selectBox = (onChange, options, value, cls = "") =>
+    `<select onchange="${onChange}" class="${cls} px-2 py-2 border border-slate-300 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400">${optionTags(options, value)}</select>`;
+
+const sortOptions = (sorts) => Object.entries(sorts).map(([value, [label]]) => ({ value, label }));
+
+const savedChoice = (key, options) => {
+    try {
+        const v = localStorage.getItem(key);
+        if (v in options) return v;
+    } catch {}
+    return Object.keys(options)[0];
+};
+
+const saveChoice = (key, v) => {
+    try {
+        localStorage.setItem(key, v);
+    } catch {}
+};
+
+const ADDRESS_SORTS = {
+    name: ["이름순", byName],
+    recent: ["최근 등록순", (a, b) => b.id.localeCompare(a.id)],
+    address: ["주소순", (a, b) => !a.address - !b.address || koCompare(a.address || "", b.address || "") || byName(a, b)],
+};
+
+let addressSort = savedChoice("addressSort", ADDRESS_SORTS);
+
+const setAddressSort = (v) => {
+    addressSort = v;
+    saveChoice("addressSort", v);
+    drawAddressList();
+};
+
+const visibleAddresses = () => {
+    const q = searchKey(addressQuery);
+    return CONTACTS.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name]).join("")).includes(q)).sort(ADDRESS_SORTS[addressSort][1]);
+};
 
 const rowButtons = (kind, id) =>
     `<div class="flex gap-3 shrink-0">
@@ -2037,15 +2078,17 @@ function renderAddresses() {
     document.getElementById("tab-addresses").innerHTML =
         sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()", "", outlineButton("📤 엑셀 등록", "importAddresses()") + (count ? excelButton("exportAddresses()") : "")) +
         (count
-            ? `<input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="w-full mb-4 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+            ? `<div class="flex gap-2 mb-4">
+                   <input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="flex-1 min-w-0 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+                   ${selectBox("setAddressSort(this.value)", sortOptions(ADDRESS_SORTS), addressSort, "shrink-0")}
+               </div>
                <div id="addressList" class="grid gap-3 md:grid-cols-2"></div>`
             : emptyState("등록된 연락처가 없습니다. 사과 판매를 등록하면 보내는 사람·받는 사람이 자동으로 추가됩니다."));
     if (count) drawAddressList();
 }
 
 function drawAddressList() {
-    const q = searchKey(addressQuery);
-    const list = CONTACTS.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name]).join("")).includes(q)).sort(byName);
+    const list = visibleAddresses();
     document.getElementById("addressList").innerHTML = list.length
         ? list
               .map(
@@ -2106,8 +2149,33 @@ const saleTotals = (list) =>
 
 const bySaleDate = (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id);
 
-const salesByMonth = () =>
-    [...SALES].sort((a, b) => bySaleDate(b, a)).reduce((m, s) => ((m[s.date.slice(0, 7)] ||= []).push(s), m), {});
+const byNewest = (a, b) => bySaleDate(b, a);
+
+const SALE_SORTS = {
+    new: ["최신순", byNewest],
+    old: ["오래된순", bySaleDate, true],
+    name: ["받는 사람순", (a, b) => koCompare(a.receiverName, b.receiverName) || byNewest(a, b)],
+    amount: ["금액 높은순", (a, b) => b.amount - a.amount || byNewest(a, b)],
+    unpaid: ["미입금 먼저", (a, b) => a.paid - b.paid || byNewest(a, b)],
+};
+
+const saleView = { year: "", month: "", sort: savedChoice("saleSort", SALE_SORTS) };
+
+const setSaleView = (key, v) => {
+    saleView[key] = v;
+    if (key === "sort") saveChoice("saleSort", v);
+    drawSales();
+};
+
+const filteredSales = () => SALES.filter((s) => s.date.startsWith(saleView.year) && (!saleView.month || s.date.slice(5, 7) === saleView.month));
+
+const salesByMonth = (list, cmp, asc) => {
+    const groups = list.reduce((m, s) => ((m[s.date.slice(0, 7)] ||= []).push(s), m), {});
+    const months = Object.keys(groups).sort();
+    return (asc ? months : months.reverse()).map((m) => [m, groups[m].sort(cmp)]);
+};
+
+const visibleSaleGroups = (list) => salesByMonth(list, ...SALE_SORTS[saleView.sort].slice(1));
 
 async function renderSales() {
     [SALES, CONTACTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses")]);
@@ -2121,10 +2189,9 @@ function drawSales() {
         el.innerHTML = header + emptyState("등록된 판매 기록이 없습니다.");
         return;
     }
-    const year = String(new Date().getFullYear());
-    const yearList = SALES.filter((s) => s.date.startsWith(year));
-    const yearTotal = saleTotals(yearList);
-    const all = saleTotals(SALES);
+    const list = filteredSales();
+    const total = saleTotals(list);
+    const years = [...new Set([...SALES.map((s) => s.date.slice(0, 4)), saleView.year].filter(Boolean))].sort().reverse();
     const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -2140,26 +2207,30 @@ function drawSales() {
         </div>
         <div class="mt-1">${rowButtons("Sale", s.id)}</div>
     </div>`;
+    const monthCard = ([month, items]) => {
+        const t = saleTotals(items);
+        return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+            <h3 class="font-bold text-slate-700">${month.slice(0, 4)}년 ${Number(month.slice(5))}월</h3>
+            <div class="flex items-baseline gap-3">
+                <span class="text-xs text-slate-500">${items.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
+                ${textButton("📥 엑셀", `exportSales('${month}')`, "text-emerald-700")}
+            </div>
+        </div>${items.map(row).join("")}`);
+    };
     el.innerHTML =
         header +
         `<div class="grid gap-4">
             ${card(`<div class="grid grid-cols-3 gap-2">
-                ${statTile(`${year}년 판매`, `${yearTotal.qty}박스`, `${yearList.length}건`)}
-                ${statTile(`${year}년 매출`, won(yearTotal.amount), "금액 입력 기준")}
-                ${statTile("미입금", won(all.unpaid), `${all.unpaidCount}건`, all.unpaidCount ? "text-red-500" : undefined)}
+                ${selectBox("setSaleView('year', this.value)", [{ value: "", label: "전체 연도" }, ...years.map((y) => ({ value: y, label: `${y}년` }))], saleView.year, "w-full")}
+                ${selectBox("setSaleView('month', this.value)", [{ value: "", label: "전체 월" }, ...Array.from({ length: 12 }, (_, i) => ({ value: pad0(i + 1), label: `${i + 1}월` }))], saleView.month, "w-full")}
+                ${selectBox("setSaleView('sort', this.value)", sortOptions(SALE_SORTS), saleView.sort, "w-full")}
+            </div>
+            <div class="grid grid-cols-3 gap-2 mt-3">
+                ${statTile("판매", `${total.qty}박스`, `${list.length}건`)}
+                ${statTile("매출", won(total.amount), "금액 입력 기준")}
+                ${statTile("미입금", won(total.unpaid), `${total.unpaidCount}건`, total.unpaidCount ? "text-red-500" : undefined)}
             </div>`)}
-            ${Object.entries(salesByMonth())
-                .map(([month, list]) => {
-                    const t = saleTotals(list);
-                    return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
-                        <h3 class="font-bold text-slate-700">${month.replace("-", "년 ")}월</h3>
-                        <div class="flex items-baseline gap-3">
-                            <span class="text-xs text-slate-500">${list.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
-                            ${textButton("📥 엑셀", `exportSales('${month}')`, "text-emerald-700")}
-                        </div>
-                    </div>${list.map(row).join("")}`);
-                })
-                .join("")}
+            ${list.length ? visibleSaleGroups(list).map(monthCard).join("") : emptyState("조건에 맞는 판매 기록이 없습니다.")}
         </div>`;
 }
 
@@ -2271,8 +2342,9 @@ async function downloadXlsx(filename, sheets) {
 }
 
 function exportSales(month = "") {
-    const rows = SALES.filter((s) => s.date.startsWith(month))
-        .sort(bySaleDate)
+    const list = month ? SALES.filter((s) => s.date.startsWith(month)) : filteredSales();
+    const rows = visibleSaleGroups(list)
+        .flatMap(([, items]) => items)
         .map((s) => ({
             날짜: s.date,
             "보내는 사람": s.senderName,
@@ -2287,19 +2359,18 @@ function exportSales(month = "") {
         }));
     const sheets = [["판매 내역", rows]];
     if (!month) {
-        const summary = Object.entries(salesByMonth())
-            .reverse()
-            .map(([m, list]) => {
-                const t = saleTotals(list);
-                return { 월: m, 건수: list.length, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid };
-            });
+        const summary = salesByMonth(list, bySaleDate, true).map(([m, items]) => {
+            const t = saleTotals(items);
+            return { 월: m, 건수: items.length, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid };
+        });
         sheets.push(["월별 합계", summary]);
     }
-    return downloadXlsx(`사과판매_${month || today()}.xlsx`, sheets);
+    const period = [saleView.year && `${saleView.year}년`, saleView.month && `${Number(saleView.month)}월`].filter(Boolean).join("_");
+    return downloadXlsx(`사과판매_${month || period || today()}.xlsx`, sheets);
 }
 
 const exportAddresses = (template = false) => {
-    const rows = (template ? [] : [...CONTACTS].sort(byName)).map((a) => Object.fromEntries(ADDRESS_FIELDS.map((f) => [f.label, a[f.name] || ""])));
+    const rows = (template ? [] : visibleAddresses()).map((a) => Object.fromEntries(ADDRESS_FIELDS.map((f) => [f.label, a[f.name] || ""])));
     return downloadXlsx(template ? "주소록_양식.xlsx" : `주소록_${today()}.xlsx`, [["주소록", rows, ADDRESS_FIELDS.map((f) => f.label)]]);
 };
 
