@@ -1169,6 +1169,8 @@ const stampNow = () => {
 
 const today = () => stampNow().slice(0, 10);
 
+const mmdd = (d) => d.slice(5).replace("-", ".");
+
 const balanceBadge = (auto, manualAt) =>
     auto
         ? `<span class="text-xs text-sky-500" title="수집 잔액 (${auto.at})">${balanceSourceTag(auto)}</span>`
@@ -1662,7 +1664,7 @@ function tripSummaryText(trip) {
         `총 경비 ${won(s.total)} · ${trip.items.length}건 · ${SPLIT_MODES[trip.splitMode]}`,
         "",
         "[경비 내역]",
-        ...sortedItems(trip).map((i) => `${i.at.slice(5).replace("-", ".")} ${i.title} ${won(i.amount)} (${itemNote(trip, i)})`),
+        ...sortedItems(trip).map((i) => `${mmdd(i.at)} ${i.title} ${won(i.amount)} (${itemNote(trip, i)})`),
         "",
         "[참가자별]",
         ...s.rows.map((r) => `${memberLabel(r)}: 낸 돈 ${won(r.paid)} / 부담 ${won(r.owed)}`),
@@ -2134,7 +2136,7 @@ async function deleteAddress(id) {
     toast("success", "연락처가 삭제되었습니다");
 }
 
-const SALE_TEXT_FIELDS = ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "product", "memo"];
+const SALE_TEXT_FIELDS = ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "product", "paidDate", "memo"];
 
 const withItem = (list, item) => (list.some((x) => x.id === item.id) ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item]);
 
@@ -2319,14 +2321,14 @@ function drawSales() {
     const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
-                <p class="text-sm"><span class="text-xs text-slate-400 tabular-nums mr-1">${s.date.slice(5).replace("-", ".")}</span><b class="text-slate-800">${esc(s.receiverName)}</b> ${telLink(s.receiverPhone)}</p>
+                <p class="text-sm"><span class="text-xs text-slate-400 tabular-nums mr-1">${mmdd(s.date)}</span><b class="text-slate-800">${esc(s.receiverName)}</b> ${telLink(s.receiverPhone)}</p>
                 <p class="text-sm text-slate-600 break-words">${esc(s.address)}</p>
                 <p class="text-xs text-slate-500">${s.senderName || s.senderPhone ? `보낸 사람 ${esc(s.senderName)} ${telLink(s.senderPhone)}` : ""}${s.memo ? ` · ${esc(s.memo)}` : ""}</p>
             </div>
             <div class="text-right shrink-0">
                 <p class="font-bold tabular-nums text-slate-800">${s.amount ? won(s.amount) : "-"}</p>
                 <p class="text-xs text-slate-500">${[esc(s.product), s.qty && `${s.qty}박스`].filter(Boolean).join(" · ")}</p>
-                <label class="inline-flex items-center gap-1 text-xs cursor-pointer ${s.paid ? "text-emerald-600" : "text-red-500"}"><input type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} onchange="toggleSalePaid('${s.id}', this.checked)" /> ${s.paid ? "입금" : "미입금"}</label>
+                <label class="inline-flex items-center gap-1 text-xs cursor-pointer ${s.paid ? "text-emerald-600" : "text-red-500"}"><input type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} onchange="toggleSalePaid('${s.id}', this.checked)" /> ${s.paid ? `입금 ${s.paidDate ? mmdd(s.paidDate) : ""}` : "미입금"}</label>
             </div>
         </div>
         <div class="mt-1">${rowButtons("Sale", s.id)}</div>
@@ -2384,7 +2386,7 @@ async function saleModal(s) {
         title: s.id ? "판매 수정" : "판매 등록",
         html: `<div class="text-left text-sm">
             <datalist id="contactOptions">${CONTACTS.map((c) => `<option value="${esc(personLine(c.name, c.phone))}">${esc(c.address)}</option>`).join("")}</datalist>
-            ${fieldLabel("날짜")}${input("date", `type="date"`)}
+            ${fieldLabel("주문일")}${input("date", `type="date"`)}
             ${person("sender", "보내는 사람")}
             ${person("receiver", "받는 사람")}
             <button type="button" onclick="sameAsSender()" class="text-xs text-indigo-600 hover:underline mt-1">↑ 보내는 사람과 같음</button>
@@ -2396,7 +2398,10 @@ async function saleModal(s) {
                 <div>${fieldLabel("금액")}${moneyInput("sl_amount", s.amount || "")}</div>
             </div>
             <p class="text-xs text-slate-400 mt-1">상품을 고르면 단가는 가격표 값으로 고정되고(바꾸려면 가격표에서 수정), 금액은 수량 × 단가로 계산됩니다(금액은 직접 고칠 수 있음).</p>
-            <label class="inline-flex items-center gap-1.5 mt-3 cursor-pointer"><input id="sl_paid" type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} /> 입금 확인</label>
+            <div class="grid grid-cols-2 gap-2 items-end">
+                <label class="inline-flex items-center gap-1.5 py-2 cursor-pointer"><input id="sl_paid" type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} /> 입금 확인</label>
+                <div>${fieldLabel("입금일")}${input("paidDate", `type="date"`)}</div>
+            </div>
             ${fieldLabel("메모")}${input("memo")}
             <p class="text-xs text-slate-400 mt-3">직접 입력한 사람은 저장할 때 주소록에 자동 등록되고, 주소가 바뀌면 주소록도 새 주소로 갱신됩니다.</p>
         </div>`,
@@ -2406,6 +2411,8 @@ async function saleModal(s) {
             sl("product").addEventListener("change", applySaleProduct);
             sl("date").addEventListener("change", refreshSaleProducts);
             ["qty", "price"].forEach((k) => sl(k).addEventListener("input", calcSaleAmount));
+            sl("paid").addEventListener("change", () => (sl("paidDate").value = sl("paid").checked ? sl("paidDate").value || today() : ""));
+            sl("paidDate").addEventListener("change", () => (sl("paid").checked = !!sl("paidDate").value));
         },
         preConfirm: () => {
             const val = (k) => sl(k).value.trim();
@@ -2434,7 +2441,7 @@ const addSale = () => submitSale(null, { date: today() });
 
 const editSale = (id) => submitSale(id, findSale(id));
 
-const toggleSalePaid = (id, paid) => putSale(id, { paid });
+const toggleSalePaid = (id, paid) => putSale(id, { paid, paidDate: paid ? today() : "" });
 
 const copySale = (id) => {
     const s = findSale(id);
@@ -2492,6 +2499,7 @@ function exportSales(month = "") {
             단가: s.price,
             금액: s.amount,
             입금: s.paid ? "입금" : "미입금",
+            입금일: s.paidDate,
             메모: s.memo,
         }));
     const sheets = [["판매 내역", rows]];
@@ -2701,7 +2709,7 @@ async function renderHistory() {
                   const doneN = r.plan?.filter((x) => r.transfersDone?.[x.key]).length || 0;
                   return card(`
             <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
-                <h3 class="font-bold text-slate-800 text-lg">${r.month} <span class="text-sm font-normal text-slate-400 tabular-nums">(${p.start.slice(5).replace("-", ".")} ~ ${p.end.slice(5).replace("-", ".")})</span></h3>
+                <h3 class="font-bold text-slate-800 text-lg">${r.month} <span class="text-sm font-normal text-slate-400 tabular-nums">(${mmdd(p.start)} ~ ${mmdd(p.end)})</span></h3>
                 <div class="flex gap-3">
                     <button onclick="viewMonth('${r.month}')" class="text-indigo-600 hover:underline text-sm">보기</button>
                     <button onclick="deleteMonth('${r.month}')" class="text-red-600 hover:underline text-sm">삭제</button>
