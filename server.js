@@ -14,13 +14,14 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
-const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips"];
+const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], addresses: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
+const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips", "addresses"];
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
     trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
+    addresses: ["senderName", "senderPhone", "receiverName", "address", "receiverPhone"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
@@ -230,6 +231,11 @@ const decryptText = (blob) => {
 
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+const formatPhone = (v) => {
+    const m = v.replace(/\D/g, "").match(/^(02|0\d{2})(\d{3,4})(\d{4})$/);
+    return m ? m.slice(1).join("-") : v;
+};
+
 const send = (res, status, data) => {
     res.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(data));
@@ -302,6 +308,11 @@ const normalize = (collection, body) => {
                 }))
                 .filter((i) => i.title && i.amount);
     }
+    if (collection === "addresses")
+        for (const k in data) {
+            const v = String(data[k] ?? "").trim();
+            data[k] = k.endsWith("Phone") ? formatPhone(v) : v;
+        }
     return data;
 };
 

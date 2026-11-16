@@ -1982,12 +1982,102 @@ async function addTxToTrip(t) {
     toast("success", `${trip.name}에 담았습니다`);
 }
 
+let addressQuery = "";
+
+const ADDRESS_FIELDS = [
+    { name: "senderName", label: "보낸사람" },
+    { name: "senderPhone", label: "보낸사람 연락처", type: "tel" },
+    { name: "receiverName", label: "받는사람", required: true },
+    { name: "address", label: "주소", required: true },
+    { name: "receiverPhone", label: "받는사람 연락처", type: "tel" },
+];
+
+const findAddress = (id) => DB.addresses.find((a) => a.id === id);
+
+const personLine = (name, phone) => [name, phone].filter(Boolean).join(" ");
+
+const addressText = (a) =>
+    [`받는사람: ${personLine(a.receiverName, a.receiverPhone)}`, `주소: ${a.address}`, (a.senderName || a.senderPhone) && `보낸사람: ${personLine(a.senderName, a.senderPhone)}`]
+        .filter(Boolean)
+        .join("\n");
+
+const telLink = (phone) => (phone ? `<a href="tel:${esc(phone)}" class="text-indigo-600 hover:underline">${esc(phone)}</a>` : "");
+
+const searchKey = (s) => String(s).toLowerCase().replace(/[\s-]/g, "");
+
+function renderAddresses() {
+    const count = DB.addresses.length;
+    document.getElementById("tab-addresses").innerHTML =
+        sectionHeader(`사과 판매 주소록 <span class="text-sm font-normal text-slate-400">${count}건</span>`, "+ 주소 추가", "saveAddress()") +
+        (count
+            ? `<input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="w-full mb-4 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+               <div id="addressList" class="grid gap-3 md:grid-cols-2"></div>`
+            : emptyState("등록된 주소가 없습니다."));
+    if (count) drawAddressList();
+}
+
+function drawAddressList() {
+    const q = searchKey(addressQuery);
+    const list = DB.addresses.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name] || "").join("")).includes(q)).reverse();
+    document.getElementById("addressList").innerHTML = list.length
+        ? list
+              .map(
+                  (a) => card(`
+            <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <p class="font-bold text-slate-800">${esc(a.receiverName)} <span class="font-normal text-sm ml-1">${telLink(a.receiverPhone)}</span></p>
+                    <p class="text-sm text-slate-600 mt-1 break-words">${esc(a.address)}</p>
+                    ${a.senderName || a.senderPhone ? `<p class="text-xs text-slate-500 mt-2">보낸사람 ${esc(a.senderName)} ${telLink(a.senderPhone)}</p>` : ""}
+                </div>
+                <div class="flex gap-2 shrink-0 text-sm">
+                    <button onclick="copyAddress('${a.id}')" class="text-slate-600 hover:underline">복사</button>
+                    <button onclick="editAddress('${a.id}')" class="text-indigo-600 hover:underline">수정</button>
+                    <button onclick="deleteAddress('${a.id}')" class="text-red-600 hover:underline">삭제</button>
+                </div>
+            </div>`)
+              )
+              .join("")
+        : `<div class="md:col-span-2">${emptyState("검색 결과가 없습니다.")}</div>`;
+}
+
+const filterAddresses = (v) => {
+    addressQuery = v;
+    drawAddressList();
+};
+
+const copyAddress = (id) => copyText(addressText(findAddress(id)), "주소가 복사되었습니다");
+
+async function saveAddress() {
+    const last = DB.addresses[DB.addresses.length - 1];
+    const v = await formModal({ title: "주소 추가", fields: ADDRESS_FIELDS, values: { senderName: last?.senderName, senderPhone: last?.senderPhone } });
+    if (!v) return;
+    await api("POST", "/api/addresses", v);
+    await reload();
+    toast("success", "주소가 추가되었습니다");
+}
+
+async function editAddress(id) {
+    const v = await formModal({ title: "주소 수정", fields: ADDRESS_FIELDS, values: findAddress(id) });
+    if (!v) return;
+    await api("PUT", `/api/addresses/${id}`, v);
+    await reload();
+    toast("success", "주소가 수정되었습니다");
+}
+
+async function deleteAddress(id) {
+    if (!(await confirmDelete(`${findAddress(id).receiverName}님 주소가 삭제됩니다. 되돌릴 수 없습니다.`))) return;
+    await api("DELETE", `/api/addresses/${id}`);
+    await reload();
+    toast("success", "주소가 삭제되었습니다");
+}
+
 function renderAll() {
     renderBanks();
     renderCards();
     renderFixed();
     renderOverview();
     renderTrips();
+    renderAddresses();
 }
 
 const sumValues = (obj) => Object.values(obj || {}).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -2331,7 +2421,7 @@ async function showTab(name) {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
-    if (["ledger", "monthly", "trips"].includes(name)) await reload();
+    if (["ledger", "monthly", "trips", "addresses"].includes(name)) await reload();
     if (name === "ledger") renderLedger();
     if (name === "monthly") renderMonthly();
     if (name === "history") renderHistory();
@@ -2345,7 +2435,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
 document.querySelectorAll(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
 
-const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed, trips: saveTrip };
+const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed, trips: saveTrip, addresses: saveAddress };
 document.addEventListener("keydown", (e) => {
     if (e.key !== "+" || e.repeat || Swal.isVisible()) return;
     const t = e.target;
