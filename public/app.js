@@ -2210,8 +2210,16 @@ const calcSaleAmount = () => {
     if (total) sl("amount").value = comma(total);
 };
 
+const saleProduct = () => PRODUCTS.find((x) => x.year === saleYear() && x.name === sl("product").value);
+
+const lockSalePrice = (locked) => {
+    sl("price").readOnly = locked;
+    sl("price").classList.toggle("!bg-slate-100", locked);
+};
+
 function applySaleProduct() {
-    const p = PRODUCTS.find((x) => x.year === saleYear() && x.name === sl("product").value);
+    const p = saleProduct();
+    lockSalePrice(!!p);
     if (!p) return;
     sl("price").value = comma(p.price);
     if (!toNum(sl("qty").value)) sl("qty").value = 1;
@@ -2387,13 +2395,14 @@ async function saleModal(s) {
                 <div>${fieldLabel("단가")}${moneyInput("sl_price", s.price || "")}</div>
                 <div>${fieldLabel("금액")}${moneyInput("sl_amount", s.amount || "")}</div>
             </div>
-            <p class="text-xs text-slate-400 mt-1">상품을 고르면 가격표의 단가가 들어가고, 금액은 수량 × 단가로 계산됩니다(직접 고칠 수 있음).</p>
+            <p class="text-xs text-slate-400 mt-1">상품을 고르면 단가는 가격표 값으로 고정되고(바꾸려면 가격표에서 수정), 금액은 수량 × 단가로 계산됩니다(금액은 직접 고칠 수 있음).</p>
             <label class="inline-flex items-center gap-1.5 mt-3 cursor-pointer"><input id="sl_paid" type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} /> 입금 확인</label>
             ${fieldLabel("메모")}${input("memo")}
             <p class="text-xs text-slate-400 mt-3">직접 입력한 사람은 저장할 때 주소록에 자동 등록되고, 주소가 바뀌면 주소록도 새 주소로 갱신됩니다.</p>
         </div>`,
         ...SAVE_DIALOG,
         didOpen: () => {
+            lockSalePrice(!!saleProduct());
             sl("product").addEventListener("change", applySaleProduct);
             sl("date").addEventListener("change", refreshSaleProducts);
             ["qty", "price"].forEach((k) => sl(k).addEventListener("input", calcSaleAmount));
