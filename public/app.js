@@ -76,9 +76,9 @@ const SAVE_DIALOG = { focusConfirm: false, showCancelButton: true, confirmButton
 
 const validated = (error, value) => (error ? (Swal.showValidationMessage(error), false) : value);
 
-const optionTags = (options, value) => options.map((o) => `<option value="${o.value}" ${o.value === value ? "selected" : ""}>${o.label}</option>`).join("");
+const optionTags = (options, value) => options.map((o) => `<option value="${esc(o.value)}" ${o.value === value ? "selected" : ""}>${esc(o.label)}</option>`).join("");
 
-const formModal = async ({ title, fields, values = {} }) => {
+const formModal = async ({ title, fields, values = {}, validate }) => {
     const html = fields
         .map((f) => {
             const v = values[f.name] ?? "";
@@ -119,7 +119,7 @@ const formModal = async ({ title, fields, values = {} }) => {
                 }
                 result[f.name] = f.type === "number" ? toNum(raw) : raw;
             }
-            return result;
+            return validated(validate?.(result), result);
         },
     });
     return value;
@@ -1976,7 +1976,7 @@ async function addTxToTrip(t) {
     const v = await formModal({
         title: "모임에 담기",
         fields: [
-            { name: "tripId", label: "모임", type: "select", options: open.map((x) => ({ value: x.id, label: esc(x.name) })) },
+            { name: "tripId", label: "모임", type: "select", options: open.map((x) => ({ value: x.id, label: x.name })) },
             { name: "title", label: "내용", required: true },
             { name: "amount", label: "금액", type: "number", required: true },
         ],
@@ -1992,6 +1992,7 @@ async function addTxToTrip(t) {
 let addressQuery = "";
 let CONTACTS = [];
 let SALES = [];
+let PRODUCTS = [];
 
 const ADDRESS_FIELDS = [
     { name: "name", label: "이름", required: true, aliases: ["성명", "고객명"] },
@@ -2052,12 +2053,10 @@ const visibleAddresses = () => {
     return CONTACTS.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name]).join("")).includes(q)).sort(ADDRESS_SORTS[addressSort][1]);
 };
 
-const rowButtons = (kind, id) =>
-    `<div class="flex gap-3 shrink-0">
-        ${textButton("복사", `copy${kind}('${id}')`, "text-slate-600")}
-        ${textButton("수정", `edit${kind}('${id}')`, "text-indigo-600")}
-        ${textButton("삭제", `delete${kind}('${id}')`, "text-red-600")}
-    </div>`;
+const ROW_ACTIONS = { copy: ["복사", "text-slate-600"], edit: ["수정", "text-indigo-600"], delete: ["삭제", "text-red-600"] };
+
+const rowButtons = (kind, id, actions = Object.keys(ROW_ACTIONS)) =>
+    `<div class="flex gap-3 shrink-0">${actions.map((a) => textButton(ROW_ACTIONS[a][0], `${a}${kind}('${id}')`, ROW_ACTIONS[a][1])).join("")}</div>`;
 
 async function saveList(collection, id, body) {
     const res = await api(id ? "PUT" : "POST", `/api/${collection}${id ? `/${id}` : ""}`, body);
@@ -2135,7 +2134,94 @@ async function deleteAddress(id) {
     toast("success", "연락처가 삭제되었습니다");
 }
 
-const SALE_TEXT_FIELDS = ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "memo"];
+const SALE_TEXT_FIELDS = ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "product", "memo"];
+
+const withItem = (list, item) => (list.some((x) => x.id === item.id) ? list.map((x) => (x.id === item.id ? item : x)) : [...list, item]);
+
+const thisYear = () => today().slice(0, 4);
+
+const descYears = (years) => [...new Set(years.filter(Boolean))].sort().reverse();
+
+const yearOptions = (years) => years.map((y) => ({ value: y, label: `${y}년` }));
+
+const productYears = () => descYears(PRODUCTS.map((p) => p.year));
+
+const productsOf = (year) => PRODUCTS.filter((p) => p.year === year).sort(byName);
+
+const findProduct = (id) => PRODUCTS.find((p) => p.id === id);
+
+function priceCard() {
+    const years = productYears().filter((y) => !saleView.year || y === saleView.year);
+    const line = (p) => `<div class="flex items-center justify-between gap-3 py-1.5 border-b border-slate-100 last:border-0 text-sm">
+        <span class="text-slate-700">${esc(p.name)}</span>
+        <span class="flex items-center gap-3 shrink-0"><b class="tabular-nums text-slate-800">${won(p.price)}</b>${rowButtons("Product", p.id, ["edit", "delete"])}</span>
+    </div>`;
+    return collapsible(
+        "salePrices",
+        "🍎 가격표",
+        (years.length
+            ? years.map((y) => `<div class="mb-3"><p class="text-xs font-bold text-slate-500">${y}년</p>${productsOf(y).map(line).join("")}</div>`).join("")
+            : `<p class="text-sm text-slate-400 mb-3">가격을 등록해 두면 판매 등록 때 상품을 고르고 수량만 넣어도 금액이 계산됩니다.</p>`) + textButton("+ 가격 추가", "addProduct()", "text-indigo-600")
+    );
+}
+
+async function submitProduct(id, values) {
+    const years = descYears([String(Number(thisYear()) + 1), thisYear(), values.year, ...productYears()]);
+    const v = await formModal({
+        title: id ? "가격 수정" : "가격 추가",
+        fields: [
+            { name: "year", label: "연도", type: "select", options: yearOptions(years) },
+            { name: "name", label: "상품 (예: 부사 10kg)", required: true },
+            { name: "price", label: "한 박스 가격", type: "number", required: true },
+        ],
+        values,
+        validate: (v) => (PRODUCTS.some((p) => p.id !== id && p.year === v.year && p.name === v.name) ? `${v.year}년 ${v.name} 가격이 이미 있습니다` : ""),
+    });
+    if (!v) return;
+    const { item } = await saveList("products", id, v);
+    PRODUCTS = withItem(PRODUCTS, item);
+    drawSales();
+    toast("success", "가격이 저장되었습니다");
+}
+
+const addProduct = () => submitProduct(null, { year: saleView.year || thisYear() });
+
+const editProduct = (id) => submitProduct(id, findProduct(id));
+
+async function deleteProduct(id) {
+    const p = findProduct(id);
+    if (!(await confirmDelete(`${p.year}년 ${p.name} 가격이 삭제됩니다. 이미 등록한 판매 기록은 그대로 남습니다.`))) return;
+    await api("DELETE", `/api/products/${id}`);
+    PRODUCTS = PRODUCTS.filter((x) => x.id !== id);
+    drawSales();
+    toast("success", "삭제되었습니다");
+}
+
+const productOptionTags = (year, current = "") => {
+    const list = productsOf(year);
+    const kept = current && !list.some((p) => p.name === current) ? [{ value: current, label: current }] : [];
+    return optionTags([{ value: "", label: "직접 입력" }, ...list.map((p) => ({ value: p.name, label: `${p.name} · ${won(p.price)}` })), ...kept], current);
+};
+
+const saleYear = () => sl("date").value.slice(0, 4);
+
+const calcSaleAmount = () => {
+    const total = toNum(sl("qty").value) * toNum(sl("price").value);
+    if (total) sl("amount").value = comma(total);
+};
+
+function applySaleProduct() {
+    const p = PRODUCTS.find((x) => x.year === saleYear() && x.name === sl("product").value);
+    if (!p) return;
+    sl("price").value = comma(p.price);
+    if (!toNum(sl("qty").value)) sl("qty").value = 1;
+    calcSaleAmount();
+}
+
+function refreshSaleProducts() {
+    sl("product").innerHTML = productOptionTags(saleYear(), sl("product").value);
+    applySaleProduct();
+}
 
 const findSale = (id) => SALES.find((s) => s.id === id);
 
@@ -2208,7 +2294,7 @@ function monthChart(list) {
 }
 
 async function renderSales() {
-    [SALES, CONTACTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses")]);
+    [SALES, CONTACTS, PRODUCTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses"), api("GET", "/api/products")]);
     drawSales();
 }
 
@@ -2216,12 +2302,12 @@ function drawSales() {
     const el = document.getElementById("tab-sales");
     const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()", "", SALES.length ? excelButton("exportSales()") : "");
     if (!SALES.length) {
-        el.innerHTML = header + emptyState("등록된 판매 기록이 없습니다.");
+        el.innerHTML = header + `<div class="grid gap-4">${priceCard()}${emptyState("등록된 판매 기록이 없습니다.")}</div>`;
         return;
     }
     const list = filteredSales();
     const total = saleTotals(list);
-    const years = [...new Set([...SALES.map((s) => s.date.slice(0, 4)), saleView.year].filter(Boolean))].sort().reverse();
+    const years = descYears([...SALES.map((s) => s.date.slice(0, 4)), saleView.year]);
     const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -2231,7 +2317,7 @@ function drawSales() {
             </div>
             <div class="text-right shrink-0">
                 <p class="font-bold tabular-nums text-slate-800">${s.amount ? won(s.amount) : "-"}</p>
-                <p class="text-xs text-slate-500">${s.qty ? `${s.qty}박스` : ""}</p>
+                <p class="text-xs text-slate-500">${[esc(s.product), s.qty && `${s.qty}박스`].filter(Boolean).join(" · ")}</p>
                 <label class="inline-flex items-center gap-1 text-xs cursor-pointer ${s.paid ? "text-emerald-600" : "text-red-500"}"><input type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} onchange="toggleSalePaid('${s.id}', this.checked)" /> ${s.paid ? "입금" : "미입금"}</label>
             </div>
         </div>
@@ -2251,7 +2337,7 @@ function drawSales() {
         header +
         `<div class="grid gap-4">
             ${card(`<div class="grid grid-cols-3 gap-2">
-                ${selectBox("setSaleView('year', this.value)", [{ value: "", label: "전체 연도" }, ...years.map((y) => ({ value: y, label: `${y}년` }))], saleView.year, "w-full")}
+                ${selectBox("setSaleView('year', this.value)", [{ value: "", label: "전체 연도" }, ...yearOptions(years)], saleView.year, "w-full")}
                 ${selectBox("setSaleView('month', this.value)", [{ value: "", label: "전체 월" }, ...Array.from({ length: 12 }, (_, i) => ({ value: pad0(i + 1), label: `${i + 1}월` }))], saleView.month, "w-full")}
                 ${selectBox("setSaleView('sort', this.value)", sortOptions(SALE_SORTS), saleView.sort, "w-full")}
             </div>
@@ -2261,6 +2347,7 @@ function drawSales() {
                 ${statTile("미입금", won(total.unpaid), `${total.unpaidCount}건`, total.unpaidCount ? "text-red-500" : undefined)}
             </div>`)}
             ${monthChart(list)}
+            ${priceCard()}
             ${list.length ? visibleSaleGroups(list).map(monthCard).join("") : emptyState("조건에 맞는 판매 기록이 없습니다.")}
         </div>`;
 }
@@ -2294,18 +2381,26 @@ async function saleModal(s) {
             ${person("receiver", "받는 사람")}
             <button type="button" onclick="sameAsSender()" class="text-xs text-indigo-600 hover:underline mt-1">↑ 보내는 사람과 같음</button>
             ${fieldLabel("받는 사람 주소")}${input("address")}
-            <div class="grid grid-cols-2 gap-2">
+            ${fieldLabel("상품")}<select id="sl_product" class="swal2-input !m-0 !w-full !flex">${productOptionTags(s.date.slice(0, 4), s.product)}</select>
+            <div class="grid grid-cols-3 gap-2">
                 <div>${fieldLabel("수량(박스)")}${input("qty", `type="number" inputmode="numeric" min="0"`)}</div>
+                <div>${fieldLabel("단가")}${moneyInput("sl_price", s.price || "")}</div>
                 <div>${fieldLabel("금액")}${moneyInput("sl_amount", s.amount || "")}</div>
             </div>
+            <p class="text-xs text-slate-400 mt-1">상품을 고르면 가격표의 단가가 들어가고, 금액은 수량 × 단가로 계산됩니다(직접 고칠 수 있음).</p>
             <label class="inline-flex items-center gap-1.5 mt-3 cursor-pointer"><input id="sl_paid" type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} /> 입금 확인</label>
-            ${fieldLabel("메모")}${input("memo", `placeholder="예: 부사 10kg"`)}
+            ${fieldLabel("메모")}${input("memo")}
             <p class="text-xs text-slate-400 mt-3">직접 입력한 사람은 저장할 때 주소록에 자동 등록되고, 주소가 바뀌면 주소록도 새 주소로 갱신됩니다.</p>
         </div>`,
         ...SAVE_DIALOG,
+        didOpen: () => {
+            sl("product").addEventListener("change", applySaleProduct);
+            sl("date").addEventListener("change", refreshSaleProducts);
+            ["qty", "price"].forEach((k) => sl(k).addEventListener("input", calcSaleAmount));
+        },
         preConfirm: () => {
             const val = (k) => sl(k).value.trim();
-            const v = { ...Object.fromEntries(SALE_TEXT_FIELDS.map((k) => [k, val(k)])), qty: toNum(val("qty")), amount: toNum(val("amount")), paid: sl("paid").checked };
+            const v = { ...Object.fromEntries(SALE_TEXT_FIELDS.map((k) => [k, val(k)])), qty: toNum(val("qty")), price: toNum(val("price")), amount: toNum(val("amount")), paid: sl("paid").checked };
             return validated(!v.receiverName || !v.address ? "받는 사람과 주소를 입력하세요" : "", v);
         },
     });
@@ -2314,7 +2409,7 @@ async function saleModal(s) {
 
 async function putSale(id, body) {
     const { item, contacts } = await saveList("sales", id, body);
-    SALES = id ? SALES.map((s) => (s.id === id ? item : s)) : [...SALES, item];
+    SALES = withItem(SALES, item);
     drawSales();
     return contacts;
 }
@@ -2383,7 +2478,9 @@ function exportSales(month = "") {
             "받는 사람": s.receiverName,
             "받는 사람 연락처": s.receiverPhone,
             주소: s.address,
+            상품: s.product,
             "수량(박스)": s.qty,
+            단가: s.price,
             금액: s.amount,
             입금: s.paid ? "입금" : "미입금",
             메모: s.memo,

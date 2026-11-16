@@ -16,14 +16,15 @@ const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
 const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips"];
-const LISTS = { addresses: ["name"], sales: ["date", "receiverName", "address"] };
+const LISTS = { addresses: ["name"], sales: ["date", "receiverName", "address"], products: ["year", "name"] };
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
     trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
     addresses: ["name", "phone", "address", "memo"],
-    sales: ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "qty", "amount", "paid", "memo"],
+    sales: ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "product", "qty", "price", "amount", "paid", "memo"],
+    products: ["year", "name", "price"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
@@ -353,10 +354,10 @@ const normalize = (collection, body) => {
     if (collection in LISTS)
         for (const k in data) {
             if (k === "paid") data.paid = !!data.paid;
-            else if (k === "qty" || k === "amount") data[k] = Math.max(0, Math.round(Number(data[k])) || 0);
+            else if (["qty", "amount", "price"].includes(k)) data[k] = Math.max(0, Math.round(Number(data[k])) || 0);
             else {
                 const v = String(data[k] ?? "").trim();
-                data[k] = k === "date" ? day(v) || kstNow().slice(0, 10) : /phone$/i.test(k) ? formatPhone(v) : v;
+                data[k] = k === "date" ? day(v) || kstNow().slice(0, 10) : k === "year" ? (/^\d{4}$/.test(v) ? v : "") : /phone$/i.test(k) ? formatPhone(v) : v;
             }
         }
     return data;
@@ -838,7 +839,7 @@ const handleApi = async (req, res, parts) => {
             const item = { ...prev, ...body, id: prev.id };
             if (LISTS[collection].some((k) => !item[k])) return send(res, 400, { error: "필수 항목을 입력하세요" });
             const next = method === "PUT" ? list.map((x) => (x.id === id ? item : x)) : [...list, item];
-            const contacts = collection === "addresses" ? next : await syncSaleContacts(prev, body, item);
+            const contacts = collection === "addresses" ? next : collection === "sales" ? await syncSaleContacts(prev, body, item) : null;
             await Promise.all([store.writeList(collection, next), collection === "sales" && contacts && store.writeList("addresses", contacts)]);
             return send(res, 200, { item, contacts });
         }
