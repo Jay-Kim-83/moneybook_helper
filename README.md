@@ -1,7 +1,7 @@
 # 가계부 작성 도우미 (Moneybook)
 
 은행·카드·고정 지출을 관리하고 월별 결제 내역을 전월과 비교하는 가계부 웹 애플리케이션입니다.
-별도 의존성 없이 Node.js 내장 모듈만으로 동작하며, 비밀번호 로그인으로 보호됩니다.
+Node.js 내장 모듈과 `pg`(Postgres 사용 시)로 동작하며, 비밀번호 로그인으로 보호됩니다.
 
 ## 실행 방법 (로컬)
 
@@ -20,6 +20,8 @@ node server.js
 - **은행별 카드 보기** — 은행 섹션별 연결된 카드 표시
 - **이번달 결제** — 은행 잔액 입력, 카드 결제 전월 대비 비교, 고정 지출 자동 등록, 실시간 요약
 - **이력** — 월별 결제 기록을 따로 저장(`data/monthly/YYYY-MM.json`)하고 요약과 함께 조회·재열람·삭제
+- **사과 판매** — 판매 이력(날짜·보내는/받는 사람·주소·수량·금액·입금) 월별 정리, 주소록 자동 등록, 엑셀 내보내기
+- **주소록** — 이름·연락처·주소 관리, 검색, 엑셀 내보내기
 - **시스템** — git 커밋 & 푸시(Render 자동 배포 트리거), 앱 재시작, 상태 표시
 
 ## 보안 설계
@@ -36,20 +38,23 @@ node server.js
 | 변수 | 설명 |
 |---|---|
 | `ADMIN_PASSWORD` | 로그인 비밀번호 (운영 환경 필수) |
-| `SESSION_SECRET` | 세션 서명 키. 미설정 시 `DATA_DIR/.session_secret`에 자동 생성·보관되어 재시작해도 로그인이 유지됨 |
+| `DATABASE_URL` | Postgres 접속 주소. 설정하면 파일 대신 Postgres(Neon 등)에 저장 (운영 환경 필수) |
+| `INGEST_KEY` | 문자 수집(`/api/ingest`) 인증 키 |
+| `DATA_KEY` | 보안 정보 암호화 키. 바뀌면 저장된 보안 정보를 복호화할 수 없음 |
+| `SESSION_SECRET` | 세션 서명 키. 미설정 시 저장소에 자동 생성·보관되어 재시작해도 로그인이 유지됨 |
 | `NODE_ENV` | `production`이면 Secure 쿠키 적용 |
-| `DATA_DIR` | `db.json` 저장 디렉터리 (기본 `./data`) |
+| `DATA_DIR` | 파일 저장 디렉터리 (`DATABASE_URL`이 없을 때만 사용, 기본 `./data`) |
 | `PORT` | 서버 포트 (기본 3000) |
 
 ## Render.com 배포
 
-1. GitHub 저장소를 Render에 연결하고 `render.yaml`로 배포(Blueprint)합니다.
-2. `ADMIN_PASSWORD`는 Render 대시보드에서 직접 입력합니다. (`SESSION_SECRET`은 자동 생성)
-3. 데이터 영구 보존을 위해 영구 디스크(`/data`)를 사용하므로 **유료 플랜(starter 이상)**이 필요합니다.
-   - 무료 플랜은 디스크가 휘발성이라 재배포·재시작 시 `db.json`이 초기화됩니다 (테스트 용도만 권장).
+1. GitHub 저장소를 Render에 연결하고 `render.yaml`로 배포(Blueprint)합니다. **무료 플랜**으로 동작합니다.
+2. `ADMIN_PASSWORD`·`DATABASE_URL`·`INGEST_KEY`·`DATA_KEY`는 Render 대시보드에서 직접 입력합니다. (`SESSION_SECRET`은 자동 생성)
+3. 무료 플랜은 디스크가 휘발성이므로 데이터는 `DATABASE_URL`의 Postgres(Neon 무료 플랜)에 영구 보존합니다.
+   - 무료 플랜은 15분간 요청이 없으면 잠들므로, 문자 수집 지연을 막으려면 외부 핑으로 상시 가동합니다.
 
 ## 기술 스택
 
-- 백엔드: Node.js (내장 `http`·`crypto`, 의존성 없음)
-- 프론트엔드: Tailwind CSS, SweetAlert2 (CDN)
-- 저장소: JSON 파일 (`DATA_DIR/db.json`)
+- 백엔드: Node.js (내장 `http`·`crypto`) + `pg`
+- 프론트엔드: Tailwind CSS, SweetAlert2, Chart.js (CDN), SheetJS (엑셀 내보내기 시에만 로드)
+- 저장소: Postgres(`DATABASE_URL` 설정 시) 또는 JSON 파일(`DATA_DIR`)

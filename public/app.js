@@ -128,11 +128,12 @@ const bankOptions = () => DB.banks.map((b) => ({ value: b.id, label: b.name }));
 
 const card = (inner) => `<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">${inner}</div>`;
 
-const sectionHeader = (title, btnLabel, onClick, resetFn = "") =>
+const sectionHeader = (title, btnLabel, onClick, resetFn = "", extra = "") =>
     `<div class="flex items-center justify-between mb-4">
         <h2 class="text-lg font-bold text-slate-700">${title}</h2>
         <div class="flex items-center gap-3">
             ${resetFn ? `<button onclick="${resetFn}" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑️ 초기화</button>` : ""}
+            ${extra}
             <button onclick="${onClick}" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition">${btnLabel}</button>
         </div>
     </div>`;
@@ -1165,6 +1166,8 @@ const stampNow = () => {
     return `${d.getFullYear()}-${pad0(d.getMonth() + 1)}-${pad0(d.getDate())} ${pad0(d.getHours())}:${pad0(d.getMinutes())}`;
 };
 
+const today = () => stampNow().slice(0, 10);
+
 const balanceBadge = (auto, manualAt) =>
     auto
         ? `<span class="text-xs text-sky-500" title="수집 잔액 (${auto.at})">${balanceSourceTag(auto)}</span>`
@@ -1601,6 +1604,10 @@ const itemNote = (trip, item) => {
 
 const fieldLabel = (text) => `<label class="block font-medium text-slate-600 mt-3 mb-1">${text}</label>`;
 
+const textButton = (label, onClick, cls) => `<button onclick="${onClick}" class="${cls} hover:underline text-sm">${label}</button>`;
+
+const outlineButton = (label, onClick, cls = "border-slate-300 text-slate-600 hover:bg-slate-50") => `<button onclick="${onClick}" class="text-sm px-3 py-1.5 rounded-lg border ${cls}">${label}</button>`;
+
 const statTile = (label, value, sub, color = "text-slate-800") => `<div class="rounded-xl border border-slate-200 bg-slate-50 px-2 py-3 text-center">
     <p class="text-xs text-slate-500">${label}</p>
     <p class="text-base font-bold tabular-nums whitespace-nowrap ${color}">${value}</p>
@@ -1720,8 +1727,6 @@ function renderTrips() {
               )
               .join("")
         : `<p class="text-sm text-slate-400 py-2">송금할 내역이 없습니다.</p>`;
-    const textButton = (label, onClick, cls) => `<button onclick="${onClick}" class="${cls} hover:underline text-sm">${label}</button>`;
-    const outlineButton = (label, onClick) => `<button onclick="${onClick}" class="text-sm px-3 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50">${label}</button>`;
     el.innerHTML =
         header +
         `<div class="flex flex-wrap gap-2 mb-4">${pills}</div>
@@ -1917,7 +1922,7 @@ async function tripItemModal(trip, item) {
 
 async function addTripItem() {
     const trip = currentTrip();
-    const v = await tripItemModal(trip, { at: trip.start || stampNow().slice(0, 10), payerId: meOf(trip.members)?.id });
+    const v = await tripItemModal(trip, { at: trip.start || today(), payerId: meOf(trip.members)?.id });
     if (!v) return;
     await putTrip(trip, { items: [...trip.items, v] });
     toast("success", "경비가 추가되었습니다");
@@ -2001,11 +2006,15 @@ const telLink = (phone) => (phone ? `<a href="tel:${esc(phone)}" class="text-ind
 
 const searchKey = (s) => String(s).toLowerCase().replace(/[\s-]/g, "");
 
+const byName = (a, b) => a.name.localeCompare(b.name, "ko");
+
+const excelButton = (onClick) => outlineButton("📥 엑셀", onClick, "border-emerald-600 text-emerald-700 hover:bg-emerald-50");
+
 const rowButtons = (kind, id) =>
-    `<div class="flex gap-3 shrink-0 text-sm">
-        <button onclick="copy${kind}('${id}')" class="text-slate-600 hover:underline">복사</button>
-        <button onclick="edit${kind}('${id}')" class="text-indigo-600 hover:underline">수정</button>
-        <button onclick="delete${kind}('${id}')" class="text-red-600 hover:underline">삭제</button>
+    `<div class="flex gap-3 shrink-0">
+        ${textButton("복사", `copy${kind}('${id}')`, "text-slate-600")}
+        ${textButton("수정", `edit${kind}('${id}')`, "text-indigo-600")}
+        ${textButton("삭제", `delete${kind}('${id}')`, "text-red-600")}
     </div>`;
 
 async function saveList(collection, id, body) {
@@ -2025,7 +2034,7 @@ async function loadAddresses() {
 function renderAddresses() {
     const count = CONTACTS.length;
     document.getElementById("tab-addresses").innerHTML =
-        sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()") +
+        sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()", "", count ? excelButton("exportAddresses()") : "") +
         (count
             ? `<input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="w-full mb-4 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                <div id="addressList" class="grid gap-3 md:grid-cols-2"></div>`
@@ -2035,7 +2044,7 @@ function renderAddresses() {
 
 function drawAddressList() {
     const q = searchKey(addressQuery);
-    const list = CONTACTS.filter((a) => !q || searchKey(personLine(a.name, a.phone) + a.address).includes(q)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
+    const list = CONTACTS.filter((a) => !q || searchKey(personLine(a.name, a.phone) + a.address).includes(q)).sort(byName);
     document.getElementById("addressList").innerHTML = list.length
         ? list
               .map(
@@ -2093,6 +2102,11 @@ const saleTotals = (list) =>
         { qty: 0, amount: 0, unpaidCount: 0, unpaid: 0 }
     );
 
+const bySaleDate = (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id);
+
+const salesByMonth = () =>
+    [...SALES].sort((a, b) => bySaleDate(b, a)).reduce((m, s) => ((m[s.date.slice(0, 7)] ||= []).push(s), m), {});
+
 async function renderSales() {
     [SALES, CONTACTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses")]);
     drawSales();
@@ -2100,7 +2114,7 @@ async function renderSales() {
 
 function drawSales() {
     const el = document.getElementById("tab-sales");
-    const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()");
+    const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()", "", SALES.length ? excelButton("exportSales()") : "");
     if (!SALES.length) {
         el.innerHTML = header + emptyState("등록된 판매 기록이 없습니다.");
         return;
@@ -2109,9 +2123,6 @@ function drawSales() {
     const yearList = SALES.filter((s) => s.date.startsWith(year));
     const yearTotal = saleTotals(yearList);
     const all = saleTotals(SALES);
-    const byMonth = [...SALES]
-        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
-        .reduce((m, s) => ((m[s.date.slice(0, 7)] ||= []).push(s), m), {});
     const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
@@ -2135,12 +2146,15 @@ function drawSales() {
                 ${statTile(`${year}년 매출`, won(yearTotal.amount), "금액 입력 기준")}
                 ${statTile("미입금", won(all.unpaid), `${all.unpaidCount}건`, all.unpaidCount ? "text-red-500" : undefined)}
             </div>`)}
-            ${Object.entries(byMonth)
+            ${Object.entries(salesByMonth())
                 .map(([month, list]) => {
                     const t = saleTotals(list);
                     return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
                         <h3 class="font-bold text-slate-700">${month.replace("-", "년 ")}월</h3>
-                        <span class="text-xs text-slate-500">${list.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
+                        <div class="flex items-baseline gap-3">
+                            <span class="text-xs text-slate-500">${list.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
+                            ${textButton("📥 엑셀", `exportSales('${month}')`, "text-emerald-700")}
+                        </div>
                     </div>${list.map(row).join("")}`);
                 })
                 .join("")}
@@ -2208,7 +2222,7 @@ async function submitSale(id, base) {
     toast("success", `저장되었습니다${contacts ? " · 주소록 반영" : ""}`);
 }
 
-const addSale = () => submitSale(null, { date: stampNow().slice(0, 10) });
+const addSale = () => submitSale(null, { date: today() });
 
 const editSale = (id) => submitSale(id, findSale(id));
 
@@ -2221,6 +2235,68 @@ const copySale = (id) => {
         "배송 정보가 복사되었습니다"
     );
 };
+
+let xlsxLoading = null;
+
+const loadXlsx = () =>
+    (xlsxLoading ??= new Promise((resolve, reject) =>
+        document.head.append(
+            Object.assign(document.createElement("script"), {
+                src: "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.mini.min.js",
+                onload: () => resolve(window.XLSX),
+                onerror: () => {
+                    xlsxLoading = null;
+                    reject(new Error("엑셀 기능을 불러오지 못했습니다"));
+                },
+            })
+        )
+    ));
+
+async function downloadXlsx(filename, sheets) {
+    try {
+        const XLSX = await loadXlsx();
+        const book = XLSX.utils.book_new();
+        const width = (v) => [...String(v ?? "")].reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
+        for (const [name, rows] of sheets) {
+            const sheet = XLSX.utils.json_to_sheet(rows);
+            sheet["!cols"] = Object.keys(rows[0] || {}).map((k) => ({ wch: Math.min(60, Math.max(...[k, ...rows.map((r) => r[k])].map(width)) + 2) }));
+            XLSX.utils.book_append_sheet(book, sheet, name);
+        }
+        XLSX.writeFile(book, filename);
+    } catch (e) {
+        toast("error", e.message);
+    }
+}
+
+function exportSales(month = "") {
+    const rows = SALES.filter((s) => s.date.startsWith(month))
+        .sort(bySaleDate)
+        .map((s) => ({
+            날짜: s.date,
+            "보내는 사람": s.senderName,
+            "보내는 사람 연락처": s.senderPhone,
+            "받는 사람": s.receiverName,
+            "받는 사람 연락처": s.receiverPhone,
+            주소: s.address,
+            "수량(박스)": s.qty,
+            금액: s.amount,
+            입금: s.paid ? "입금" : "미입금",
+            메모: s.memo,
+        }));
+    const sheets = [["판매 내역", rows]];
+    if (!month) {
+        const summary = Object.entries(salesByMonth())
+            .reverse()
+            .map(([m, list]) => {
+                const t = saleTotals(list);
+                return { 월: m, 건수: list.length, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid };
+            });
+        sheets.push(["월별 합계", summary]);
+    }
+    return downloadXlsx(`사과판매_${month || today()}.xlsx`, sheets);
+}
+
+const exportAddresses = () => downloadXlsx(`주소록_${today()}.xlsx`, [["주소록", [...CONTACTS].sort(byName).map((a) => ({ 이름: a.name, 연락처: a.phone, 주소: a.address }))]]);
 
 async function deleteSale(id) {
     if (!(await confirmDelete(`${findSale(id).receiverName}님 판매 기록이 삭제됩니다. 주소록은 그대로 남습니다.`))) return;
