@@ -14,14 +14,16 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], addresses: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
-const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips", "addresses"];
+const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
+const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips"];
+const LISTS = { addresses: ["name"], sales: ["date", "receiverName", "address"] };
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
     trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
-    addresses: ["senderName", "senderPhone", "receiverName", "address", "receiverPhone"],
+    addresses: ["name", "phone", "address"],
+    sales: ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "qty", "amount", "paid", "memo"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
 
@@ -59,8 +61,7 @@ const fileStore = {
         return { ...defaultData(), ...parseJson(fs.readFileSync(DB_PATH, "utf-8")) };
     },
     async writeDB(data) {
-        ensureDir(DATA_DIR);
-        fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 4));
+        await this.writeList("db", data);
     },
     monthlyFile: (m) => path.join(MONTHLY_DIR, `${m}.json`),
     async readMonthly(m) {
@@ -117,6 +118,14 @@ const fileStore = {
         ensureDir(DATA_DIR);
         fs.writeFileSync(TRANSACTIONS_PATH, "[]");
     },
+    listFile: (name) => path.join(DATA_DIR, `${name}.json`),
+    async readList(name) {
+        return fs.existsSync(this.listFile(name)) ? parseJson(fs.readFileSync(this.listFile(name), "utf-8")) : [];
+    },
+    async writeList(name, list) {
+        ensureDir(DATA_DIR);
+        fs.writeFileSync(this.listFile(name), JSON.stringify(list, null, 4));
+    },
 };
 
 const createPgStore = () => {
@@ -157,7 +166,7 @@ const createPgStore = () => {
             return rows.length ? { ...defaultData(), ...rows[0].value } : defaultData();
         },
         async writeDB(data) {
-            await q("INSERT INTO kv(key, value) VALUES('db', $1) ON CONFLICT (key) DO UPDATE SET value = $1", [JSON.stringify(data)]);
+            await this.writeList("db", data);
         },
         async readMonthly(m) {
             if (!isMonth(m)) return null;
@@ -195,6 +204,13 @@ const createPgStore = () => {
         async clearTransactions() {
             await q("DELETE FROM transactions");
         },
+        async readList(name) {
+            const { rows } = await q("SELECT value FROM kv WHERE key = $1", [name]);
+            return rows[0]?.value || [];
+        },
+        async writeList(name, list) {
+            await q("INSERT INTO kv(key, value) VALUES($1, $2) ON CONFLICT (key) DO UPDATE SET value = $2", [name, JSON.stringify(list)]);
+        },
     };
 };
 
@@ -231,9 +247,37 @@ const decryptText = (blob) => {
 
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+const digitsOf = (v) => String(v || "").replace(/\D/g, "");
+
 const formatPhone = (v) => {
-    const m = v.replace(/\D/g, "").match(/^(02|0\d{2})(\d{3,4})(\d{4})$/);
+    const m = digitsOf(v).match(/^(02|0\d{2})(\d{3,4})(\d{4})$/);
     return m ? m.slice(1).join("-") : v;
+};
+
+const day = (v) => (/^\d{4}-\d{2}-\d{2}/.test(String(v)) ? String(v).slice(0, 10) : "");
+
+const syncContact = (contacts, name, phone, address) => {
+    if (!name) return 0;
+    const digits = digitsOf(phone);
+    const found = contacts.find((c) => (digits ? digitsOf(c.phone) === digits : c.name === name));
+    if (!found) {
+        contacts.push({ id: genId(), name, phone, address });
+        return 1;
+    }
+    if (!address || found.address === address) return 0;
+    found.address = address;
+    return 1;
+};
+
+const syncSaleContacts = async (prev, body, sale) => {
+    const touched = (keys) => keys.some((k) => k in body && body[k] !== prev[k]);
+    const people = [
+        touched(["receiverName", "receiverPhone", "address"]) && [sale.receiverName, sale.receiverPhone, sale.address],
+        touched(["senderName", "senderPhone"]) && [sale.senderName, sale.senderPhone, ""],
+    ].filter(Boolean);
+    if (!people.length) return null;
+    const contacts = await store.readList("addresses");
+    return people.reduce((n, p) => n + syncContact(contacts, ...p), 0) ? contacts : null;
 };
 
 const send = (res, status, data) => {
@@ -284,7 +328,6 @@ const normalize = (collection, body) => {
     if (collection === "fixedExpenses" && data.amount != null) data.amount = Number(data.amount) || 0;
     if (collection === "trips") {
         const list = (v) => (Array.isArray(v) ? v : []);
-        const day = (v) => (/^\d{4}-\d{2}-\d{2}/.test(String(v)) ? String(v).slice(0, 10) : "");
         if ("name" in data) data.name = String(data.name || "").trim();
         if ("start" in data) data.start = day(data.start);
         if ("end" in data) data.end = day(data.end);
@@ -308,10 +351,14 @@ const normalize = (collection, body) => {
                 }))
                 .filter((i) => i.title && i.amount);
     }
-    if (collection === "addresses")
+    if (collection in LISTS)
         for (const k in data) {
-            const v = String(data[k] ?? "").trim();
-            data[k] = k.endsWith("Phone") ? formatPhone(v) : v;
+            if (k === "paid") data.paid = !!data.paid;
+            else if (k === "qty" || k === "amount") data[k] = Math.max(0, Math.round(Number(data[k])) || 0);
+            else {
+                const v = String(data[k] ?? "").trim();
+                data[k] = k === "date" ? day(v) || kstNow().slice(0, 10) : /phone$/i.test(k) ? formatPhone(v) : v;
+            }
         }
     return data;
 };
@@ -765,6 +812,26 @@ const handleApi = async (req, res, parts) => {
         ];
         await store.writeDB(db);
         return send(res, 200, { ok: true });
+    }
+
+    if (collection in LISTS) {
+        const list = await store.readList(collection);
+        if (method === "GET") return send(res, 200, list);
+        if (method === "DELETE" && id) {
+            await store.writeList(collection, list.filter((x) => x.id !== id));
+            return send(res, 200, { ok: true });
+        }
+        if (method === "POST" || (method === "PUT" && id)) {
+            const prev = method === "PUT" ? list.find((x) => x.id === id) : { id: genId() };
+            if (!prev) return send(res, 404, { error: "찾을 수 없습니다" });
+            const body = normalize(collection, await readBody(req));
+            const item = { ...prev, ...body, id: prev.id };
+            if (LISTS[collection].some((k) => !item[k])) return send(res, 400, { error: "필수 항목을 입력하세요" });
+            const next = method === "PUT" ? list.map((x) => (x.id === id ? item : x)) : [...list, item];
+            const contacts = collection === "addresses" ? next : await syncSaleContacts(prev, body, item);
+            await Promise.all([store.writeList(collection, next), collection === "sales" && contacts && store.writeList("addresses", contacts)]);
+            return send(res, 200, { item, contacts });
+        }
     }
 
     if (COLLECTIONS.includes(collection)) {

@@ -1601,6 +1601,12 @@ const itemNote = (trip, item) => {
 
 const fieldLabel = (text) => `<label class="block font-medium text-slate-600 mt-3 mb-1">${text}</label>`;
 
+const statTile = (label, value, sub, color = "text-slate-800") => `<div class="rounded-xl border border-slate-200 bg-slate-50 px-2 py-3 text-center">
+    <p class="text-xs text-slate-500">${label}</p>
+    <p class="text-base font-bold tabular-nums whitespace-nowrap ${color}">${value}</p>
+    <p class="text-[11px] text-slate-400">${sub}</p>
+</div>`;
+
 const moneyInput = (id, value = "") => `<input id="${id}" type="text" inputmode="numeric" class="swal2-input !m-0 !w-full text-right" value="${comma(value)}" oninput="formatMoneyInput(this)" />`;
 
 function settleTrip(trip) {
@@ -1679,11 +1685,6 @@ function renderTrips() {
                 `<button onclick="selectTrip('${t.id}')" class="px-3 py-1.5 rounded-full text-sm border transition ${t.id === trip.id ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-300 hover:bg-slate-50"}">${t.closed ? "🔒" : "🧳"} ${esc(t.name)}</button>`
         )
         .join("");
-    const tile = (label, value, sub) => `<div class="rounded-xl border border-slate-200 bg-slate-50 px-2 py-3 text-center">
-        <p class="text-xs text-slate-500">${label}</p>
-        <p class="text-base font-bold tabular-nums text-slate-800 whitespace-nowrap">${value}</p>
-        <p class="text-[11px] text-slate-400">${sub}</p>
-    </div>`;
     const itemRows = trip.items.length
         ? sortedItems(trip)
               .map(
@@ -1739,9 +1740,9 @@ function renderTrips() {
                 </div>
             </div>
             <div class="grid grid-cols-3 gap-2 mt-4">
-                ${tile("총 경비", won(s.total), `${trip.items.length}건`)}
-                ${tile("참가", `${trip.members.length}곳`, `총 ${trip.members.reduce((n, m) => n + m.heads, 0)}명`)}
-                ${tile("송금", `${s.transfers.length}건`, "정산 결과 기준")}
+                ${statTile("총 경비", won(s.total), `${trip.items.length}건`)}
+                ${statTile("참가", `${trip.members.length}곳`, `총 ${trip.members.reduce((n, m) => n + m.heads, 0)}명`)}
+                ${statTile("송금", `${s.transfers.length}건`, "정산 결과 기준")}
             </div>`)}
             ${card(`
             <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
@@ -1983,57 +1984,68 @@ async function addTxToTrip(t) {
 }
 
 let addressQuery = "";
+let CONTACTS = [];
+let SALES = [];
 
 const ADDRESS_FIELDS = [
-    { name: "senderName", label: "보낸사람" },
-    { name: "senderPhone", label: "보낸사람 연락처", type: "tel" },
-    { name: "receiverName", label: "받는사람", required: true },
-    { name: "address", label: "주소", required: true },
-    { name: "receiverPhone", label: "받는사람 연락처", type: "tel" },
+    { name: "name", label: "이름", required: true },
+    { name: "phone", label: "연락처", type: "tel" },
+    { name: "address", label: "주소" },
 ];
 
-const findAddress = (id) => DB.addresses.find((a) => a.id === id);
+const findAddress = (id) => CONTACTS.find((a) => a.id === id);
 
 const personLine = (name, phone) => [name, phone].filter(Boolean).join(" ");
-
-const addressText = (a) =>
-    [`받는사람: ${personLine(a.receiverName, a.receiverPhone)}`, `주소: ${a.address}`, (a.senderName || a.senderPhone) && `보낸사람: ${personLine(a.senderName, a.senderPhone)}`]
-        .filter(Boolean)
-        .join("\n");
 
 const telLink = (phone) => (phone ? `<a href="tel:${esc(phone)}" class="text-indigo-600 hover:underline">${esc(phone)}</a>` : "");
 
 const searchKey = (s) => String(s).toLowerCase().replace(/[\s-]/g, "");
 
+const rowButtons = (kind, id) =>
+    `<div class="flex gap-3 shrink-0 text-sm">
+        <button onclick="copy${kind}('${id}')" class="text-slate-600 hover:underline">복사</button>
+        <button onclick="edit${kind}('${id}')" class="text-indigo-600 hover:underline">수정</button>
+        <button onclick="delete${kind}('${id}')" class="text-red-600 hover:underline">삭제</button>
+    </div>`;
+
+async function saveList(collection, id, body) {
+    const res = await api(id ? "PUT" : "POST", `/api/${collection}${id ? `/${id}` : ""}`, body);
+    if (res.contacts) {
+        CONTACTS = res.contacts;
+        renderAddresses();
+    }
+    return res;
+}
+
+async function loadAddresses() {
+    CONTACTS = await api("GET", "/api/addresses");
+    renderAddresses();
+}
+
 function renderAddresses() {
-    const count = DB.addresses.length;
+    const count = CONTACTS.length;
     document.getElementById("tab-addresses").innerHTML =
-        sectionHeader(`사과 판매 주소록 <span class="text-sm font-normal text-slate-400">${count}건</span>`, "+ 주소 추가", "saveAddress()") +
+        sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()") +
         (count
             ? `<input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="w-full mb-4 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                <div id="addressList" class="grid gap-3 md:grid-cols-2"></div>`
-            : emptyState("등록된 주소가 없습니다."));
+            : emptyState("등록된 연락처가 없습니다. 사과 판매를 등록하면 보내는 사람·받는 사람이 자동으로 추가됩니다."));
     if (count) drawAddressList();
 }
 
 function drawAddressList() {
     const q = searchKey(addressQuery);
-    const list = DB.addresses.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name] || "").join("")).includes(q)).reverse();
+    const list = CONTACTS.filter((a) => !q || searchKey(personLine(a.name, a.phone) + a.address).includes(q)).sort((a, b) => a.name.localeCompare(b.name, "ko"));
     document.getElementById("addressList").innerHTML = list.length
         ? list
               .map(
                   (a) => card(`
             <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                    <p class="font-bold text-slate-800">${esc(a.receiverName)} <span class="font-normal text-sm ml-1">${telLink(a.receiverPhone)}</span></p>
-                    <p class="text-sm text-slate-600 mt-1 break-words">${esc(a.address)}</p>
-                    ${a.senderName || a.senderPhone ? `<p class="text-xs text-slate-500 mt-2">보낸사람 ${esc(a.senderName)} ${telLink(a.senderPhone)}</p>` : ""}
+                    <p class="font-bold text-slate-800">${esc(a.name)} <span class="font-normal text-sm ml-1">${telLink(a.phone)}</span></p>
+                    ${a.address ? `<p class="text-sm text-slate-600 mt-1 break-words">${esc(a.address)}</p>` : ""}
                 </div>
-                <div class="flex gap-2 shrink-0 text-sm">
-                    <button onclick="copyAddress('${a.id}')" class="text-slate-600 hover:underline">복사</button>
-                    <button onclick="editAddress('${a.id}')" class="text-indigo-600 hover:underline">수정</button>
-                    <button onclick="deleteAddress('${a.id}')" class="text-red-600 hover:underline">삭제</button>
-                </div>
+                ${rowButtons("Address", a.id)}
             </div>`)
               )
               .join("")
@@ -2045,30 +2057,177 @@ const filterAddresses = (v) => {
     drawAddressList();
 };
 
-const copyAddress = (id) => copyText(addressText(findAddress(id)), "주소가 복사되었습니다");
+const copyAddress = (id) => {
+    const a = findAddress(id);
+    copyText([personLine(a.name, a.phone), a.address].filter(Boolean).join("\n"), "연락처가 복사되었습니다");
+};
 
-async function saveAddress() {
-    const last = DB.addresses[DB.addresses.length - 1];
-    const v = await formModal({ title: "주소 추가", fields: ADDRESS_FIELDS, values: { senderName: last?.senderName, senderPhone: last?.senderPhone } });
+async function submitAddress(id, values) {
+    const v = await formModal({ title: id ? "연락처 수정" : "연락처 추가", fields: ADDRESS_FIELDS, values });
     if (!v) return;
-    await api("POST", "/api/addresses", v);
-    await reload();
-    toast("success", "주소가 추가되었습니다");
+    await saveList("addresses", id, v);
+    toast("success", id ? "연락처가 수정되었습니다" : "연락처가 추가되었습니다");
 }
 
-async function editAddress(id) {
-    const v = await formModal({ title: "주소 수정", fields: ADDRESS_FIELDS, values: findAddress(id) });
-    if (!v) return;
-    await api("PUT", `/api/addresses/${id}`, v);
-    await reload();
-    toast("success", "주소가 수정되었습니다");
-}
+const saveAddress = () => submitAddress(null);
+
+const editAddress = (id) => submitAddress(id, findAddress(id));
 
 async function deleteAddress(id) {
-    if (!(await confirmDelete(`${findAddress(id).receiverName}님 주소가 삭제됩니다. 되돌릴 수 없습니다.`))) return;
+    if (!(await confirmDelete(`${findAddress(id).name}님 연락처가 삭제됩니다. 판매 기록은 그대로 남습니다.`))) return;
     await api("DELETE", `/api/addresses/${id}`);
-    await reload();
-    toast("success", "주소가 삭제되었습니다");
+    CONTACTS = CONTACTS.filter((a) => a.id !== id);
+    renderAddresses();
+    toast("success", "연락처가 삭제되었습니다");
+}
+
+const SALE_TEXT_FIELDS = ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "memo"];
+
+const findSale = (id) => SALES.find((s) => s.id === id);
+
+const sl = (k) => document.getElementById(`sl_${k}`);
+
+const saleTotals = (list) =>
+    list.reduce(
+        (t, s) => ({ qty: t.qty + s.qty, amount: t.amount + s.amount, unpaidCount: t.unpaidCount + !s.paid, unpaid: t.unpaid + (s.paid ? 0 : s.amount) }),
+        { qty: 0, amount: 0, unpaidCount: 0, unpaid: 0 }
+    );
+
+async function renderSales() {
+    [SALES, CONTACTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses")]);
+    drawSales();
+}
+
+function drawSales() {
+    const el = document.getElementById("tab-sales");
+    const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()");
+    if (!SALES.length) {
+        el.innerHTML = header + emptyState("등록된 판매 기록이 없습니다.");
+        return;
+    }
+    const year = String(new Date().getFullYear());
+    const yearList = SALES.filter((s) => s.date.startsWith(year));
+    const yearTotal = saleTotals(yearList);
+    const all = saleTotals(SALES);
+    const byMonth = [...SALES]
+        .sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id))
+        .reduce((m, s) => ((m[s.date.slice(0, 7)] ||= []).push(s), m), {});
+    const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
+        <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0">
+                <p class="text-sm"><span class="text-xs text-slate-400 tabular-nums mr-1">${s.date.slice(5).replace("-", ".")}</span><b class="text-slate-800">${esc(s.receiverName)}</b> ${telLink(s.receiverPhone)}</p>
+                <p class="text-sm text-slate-600 break-words">${esc(s.address)}</p>
+                <p class="text-xs text-slate-500">${s.senderName || s.senderPhone ? `보낸 사람 ${esc(s.senderName)} ${telLink(s.senderPhone)}` : ""}${s.memo ? ` · ${esc(s.memo)}` : ""}</p>
+            </div>
+            <div class="text-right shrink-0">
+                <p class="font-bold tabular-nums text-slate-800">${s.amount ? won(s.amount) : "-"}</p>
+                <p class="text-xs text-slate-500">${s.qty ? `${s.qty}박스` : ""}</p>
+                <label class="inline-flex items-center gap-1 text-xs cursor-pointer ${s.paid ? "text-emerald-600" : "text-red-500"}"><input type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} onchange="toggleSalePaid('${s.id}', this.checked)" /> ${s.paid ? "입금" : "미입금"}</label>
+            </div>
+        </div>
+        <div class="mt-1">${rowButtons("Sale", s.id)}</div>
+    </div>`;
+    el.innerHTML =
+        header +
+        `<div class="grid gap-4">
+            ${card(`<div class="grid grid-cols-3 gap-2">
+                ${statTile(`${year}년 판매`, `${yearTotal.qty}박스`, `${yearList.length}건`)}
+                ${statTile(`${year}년 매출`, won(yearTotal.amount), "금액 입력 기준")}
+                ${statTile("미입금", won(all.unpaid), `${all.unpaidCount}건`, all.unpaidCount ? "text-red-500" : undefined)}
+            </div>`)}
+            ${Object.entries(byMonth)
+                .map(([month, list]) => {
+                    const t = saleTotals(list);
+                    return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+                        <h3 class="font-bold text-slate-700">${month.replace("-", "년 ")}월</h3>
+                        <span class="text-xs text-slate-500">${list.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
+                    </div>${list.map(row).join("")}`);
+                })
+                .join("")}
+        </div>`;
+}
+
+function pickContact(who, key = sl(`${who}Name`).value) {
+    const c = CONTACTS.find((x) => personLine(x.name, x.phone) === key);
+    if (!c) return;
+    sl(`${who}Name`).value = c.name;
+    sl(`${who}Phone`).value = c.phone;
+    if (who === "receiver" && c.address) sl("address").value = c.address;
+}
+
+function sameAsSender() {
+    sl("receiverName").value = sl("senderName").value;
+    sl("receiverPhone").value = sl("senderPhone").value;
+    pickContact("receiver", personLine(sl("senderName").value, sl("senderPhone").value));
+}
+
+async function saleModal(s) {
+    const input = (k, attrs = "") => `<input id="sl_${k}" class="swal2-input !m-0 !w-full" value="${esc(s[k])}" ${attrs} />`;
+    const person = (who, label) => `<div class="grid grid-cols-2 gap-2">
+        <div>${fieldLabel(label)}${input(`${who}Name`, `list="contactOptions" autocomplete="off" oninput="pickContact('${who}')"`)}</div>
+        <div>${fieldLabel("연락처")}${input(`${who}Phone`, `type="tel"`)}</div>
+    </div>`;
+    const { value } = await Swal.fire({
+        title: s.id ? "판매 수정" : "판매 등록",
+        html: `<div class="text-left text-sm">
+            <datalist id="contactOptions">${CONTACTS.map((c) => `<option value="${esc(personLine(c.name, c.phone))}">${esc(c.address)}</option>`).join("")}</datalist>
+            ${fieldLabel("날짜")}${input("date", `type="date"`)}
+            ${person("sender", "보내는 사람")}
+            ${person("receiver", "받는 사람")}
+            <button type="button" onclick="sameAsSender()" class="text-xs text-indigo-600 hover:underline mt-1">↑ 보내는 사람과 같음</button>
+            ${fieldLabel("받는 사람 주소")}${input("address")}
+            <div class="grid grid-cols-2 gap-2">
+                <div>${fieldLabel("수량(박스)")}${input("qty", `type="number" inputmode="numeric" min="0"`)}</div>
+                <div>${fieldLabel("금액")}${moneyInput("sl_amount", s.amount || "")}</div>
+            </div>
+            <label class="inline-flex items-center gap-1.5 mt-3 cursor-pointer"><input id="sl_paid" type="checkbox" class="w-4 h-4 accent-emerald-600" ${s.paid ? "checked" : ""} /> 입금 확인</label>
+            ${fieldLabel("메모")}${input("memo", `placeholder="예: 부사 10kg"`)}
+            <p class="text-xs text-slate-400 mt-3">직접 입력한 사람은 저장할 때 주소록에 자동 등록되고, 주소가 바뀌면 주소록도 새 주소로 갱신됩니다.</p>
+        </div>`,
+        ...SAVE_DIALOG,
+        preConfirm: () => {
+            const val = (k) => sl(k).value.trim();
+            const v = { ...Object.fromEntries(SALE_TEXT_FIELDS.map((k) => [k, val(k)])), qty: toNum(val("qty")), amount: toNum(val("amount")), paid: sl("paid").checked };
+            return validated(!v.receiverName || !v.address ? "받는 사람과 주소를 입력하세요" : "", v);
+        },
+    });
+    return value;
+}
+
+async function putSale(id, body) {
+    const { item, contacts } = await saveList("sales", id, body);
+    SALES = id ? SALES.map((s) => (s.id === id ? item : s)) : [...SALES, item];
+    drawSales();
+    return contacts;
+}
+
+async function submitSale(id, base) {
+    const v = await saleModal(base);
+    if (!v) return;
+    const contacts = await putSale(id, v);
+    toast("success", `저장되었습니다${contacts ? " · 주소록 반영" : ""}`);
+}
+
+const addSale = () => submitSale(null, { date: stampNow().slice(0, 10) });
+
+const editSale = (id) => submitSale(id, findSale(id));
+
+const toggleSalePaid = (id, paid) => putSale(id, { paid });
+
+const copySale = (id) => {
+    const s = findSale(id);
+    copyText(
+        [`받는사람: ${personLine(s.receiverName, s.receiverPhone)}`, `주소: ${s.address}`, (s.senderName || s.senderPhone) && `보낸사람: ${personLine(s.senderName, s.senderPhone)}`].filter(Boolean).join("\n"),
+        "배송 정보가 복사되었습니다"
+    );
+};
+
+async function deleteSale(id) {
+    if (!(await confirmDelete(`${findSale(id).receiverName}님 판매 기록이 삭제됩니다. 주소록은 그대로 남습니다.`))) return;
+    await api("DELETE", `/api/sales/${id}`);
+    SALES = SALES.filter((s) => s.id !== id);
+    drawSales();
+    toast("success", "판매 기록이 삭제되었습니다");
 }
 
 function renderAll() {
@@ -2077,7 +2236,6 @@ function renderAll() {
     renderFixed();
     renderOverview();
     renderTrips();
-    renderAddresses();
 }
 
 const sumValues = (obj) => Object.values(obj || {}).reduce((s, v) => s + (Number(v) || 0), 0);
@@ -2421,8 +2579,10 @@ async function showTab(name) {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
-    if (["ledger", "monthly", "trips", "addresses"].includes(name)) await reload();
+    if (["ledger", "monthly", "trips"].includes(name)) await reload();
     if (name === "ledger") renderLedger();
+    if (name === "sales") renderSales();
+    if (name === "addresses") loadAddresses();
     if (name === "monthly") renderMonthly();
     if (name === "history") renderHistory();
     if (name === "system") renderSystem();
@@ -2435,7 +2595,7 @@ document.getElementById("logoutBtn").addEventListener("click", async () => {
 
 document.querySelectorAll(".tab-btn").forEach((btn) => btn.addEventListener("click", () => showTab(btn.dataset.tab)));
 
-const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed, trips: saveTrip, addresses: saveAddress };
+const addActions = { banks: saveBank, cards: saveCard, fixed: saveFixed, trips: saveTrip, addresses: saveAddress, sales: addSale };
 document.addEventListener("keydown", (e) => {
     if (e.key !== "+" || e.repeat || Swal.isVisible()) return;
     const t = e.target;
