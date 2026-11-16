@@ -772,20 +772,20 @@ const setLedgerFilter = (k) => {
     drawLedger();
 };
 
-const ledgerOpen = (k) => {
+const sectionOpen = (k) => {
     try {
         return localStorage.getItem("ledgerSect_" + k) !== "0";
     } catch {
         return true;
     }
 };
-const ledgerToggle = (k, open) => {
+const sectionToggle = (k, open) => {
     try {
         localStorage.setItem("ledgerSect_" + k, open ? "1" : "0");
     } catch {}
 };
 const collapsible = (key, titleHtml, bodyHtml) =>
-    card(`<details ${ledgerOpen(key) ? "open" : ""} ontoggle="ledgerToggle('${key}', this.open)">
+    card(`<details ${sectionOpen(key) ? "open" : ""} ontoggle="sectionToggle('${key}', this.open)">
         <summary class="cursor-pointer select-none">
             <h3 class="font-bold text-slate-700 inline">${titleHtml}</h3>
         </summary>
@@ -2177,6 +2177,36 @@ const salesByMonth = (list, cmp, asc) => {
 
 const visibleSaleGroups = (list) => salesByMonth(list, ...SALE_SORTS[saleView.sort].slice(1));
 
+const monthOnly = (ym) => `${Number(ym.slice(-2))}월`;
+
+const monthLabel = (ym) => `${ym.slice(0, 4)}년 ${monthOnly(ym)}`;
+
+const monthTotals = (list) => salesByMonth(list, bySaleDate, true).map(([month, items]) => ({ month, count: items.length, ...saleTotals(items) }));
+
+const CHART_MONTHS = 12;
+
+function monthChart(list) {
+    const all = monthTotals(list);
+    const months = all.slice(-CHART_MONTHS);
+    const max = Math.max(...months.map((t) => t.amount));
+    if (months.length < 2 || !max) return "";
+    const year = months[0].month.slice(0, 4);
+    const oneYear = months.at(-1).month.startsWith(year);
+    return collapsible(
+        "saleChart",
+        `📊 ${oneYear ? `${year}년 ` : ""}월별 매출${all.length > CHART_MONTHS ? ` <span class="text-sm font-normal text-slate-400">최근 ${CHART_MONTHS}달</span>` : ""}`,
+        `<ul class="space-y-2.5 text-sm">${months
+            .map(
+                (t) => `<li class="flex flex-wrap items-baseline justify-between gap-x-3 md:flex-nowrap md:items-center">
+                <span class="text-slate-600 md:w-24 md:shrink-0">${(oneYear ? monthOnly : monthLabel)(t.month)}</span>
+                <div class="h-3 mt-1 basis-full order-last md:order-none md:basis-auto md:flex-1 md:mt-0" aria-hidden="true">${t.amount ? `<div class="h-full rounded-r-[4px] bg-[#2a78d6]" style="width: max(4px, ${(t.amount / max) * 100}%)"></div>` : ""}</div>
+                <span class="md:w-44 md:shrink-0 md:text-right"><b class="tabular-nums text-slate-800">${won(t.amount)}</b>${t.qty ? ` <span class="text-xs text-slate-400">${t.qty}박스</span>` : ""}</span>
+            </li>`
+            )
+            .join("")}</ul>`
+    );
+}
+
 async function renderSales() {
     [SALES, CONTACTS] = await Promise.all([api("GET", "/api/sales"), api("GET", "/api/addresses")]);
     drawSales();
@@ -2210,7 +2240,7 @@ function drawSales() {
     const monthCard = ([month, items]) => {
         const t = saleTotals(items);
         return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
-            <h3 class="font-bold text-slate-700">${month.slice(0, 4)}년 ${Number(month.slice(5))}월</h3>
+            <h3 class="font-bold text-slate-700">${monthLabel(month)}</h3>
             <div class="flex items-baseline gap-3">
                 <span class="text-xs text-slate-500">${items.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
                 ${textButton("📥 엑셀", `exportSales('${month}')`, "text-emerald-700")}
@@ -2230,6 +2260,7 @@ function drawSales() {
                 ${statTile("매출", won(total.amount), "금액 입력 기준")}
                 ${statTile("미입금", won(total.unpaid), `${total.unpaidCount}건`, total.unpaidCount ? "text-red-500" : undefined)}
             </div>`)}
+            ${monthChart(list)}
             ${list.length ? visibleSaleGroups(list).map(monthCard).join("") : emptyState("조건에 맞는 판매 기록이 없습니다.")}
         </div>`;
 }
@@ -2359,13 +2390,10 @@ function exportSales(month = "") {
         }));
     const sheets = [["판매 내역", rows]];
     if (!month) {
-        const summary = salesByMonth(list, bySaleDate, true).map(([m, items]) => {
-            const t = saleTotals(items);
-            return { 월: m, 건수: items.length, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid };
-        });
+        const summary = monthTotals(list).map((t) => ({ 월: t.month, 건수: t.count, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid }));
         sheets.push(["월별 합계", summary]);
     }
-    const period = [saleView.year && `${saleView.year}년`, saleView.month && `${Number(saleView.month)}월`].filter(Boolean).join("_");
+    const period = [saleView.year && `${saleView.year}년`, saleView.month && monthOnly(saleView.month)].filter(Boolean).join("_");
     return downloadXlsx(`사과판매_${month || period || today()}.xlsx`, sheets);
 }
 
