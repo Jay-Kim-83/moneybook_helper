@@ -2188,8 +2188,8 @@ const CHART_MONTHS = 12;
 function monthChart(list) {
     const all = monthTotals(list);
     const months = all.slice(-CHART_MONTHS);
-    const max = Math.max(...months.map((t) => t.amount));
-    if (months.length < 2 || !max) return "";
+    const max = Math.max(0, ...months.map((t) => t.amount));
+    if (!max) return "";
     const year = months[0].month.slice(0, 4);
     const oneYear = months.at(-1).month.startsWith(year);
     return collapsible(
