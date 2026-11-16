@@ -22,7 +22,7 @@ const FIELDS = {
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
     trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
-    addresses: ["name", "phone", "address"],
+    addresses: ["name", "phone", "address", "memo"],
     sales: ["date", "senderName", "senderPhone", "receiverName", "receiverPhone", "address", "qty", "amount", "paid", "memo"],
 };
 const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json" };
@@ -256,28 +256,27 @@ const formatPhone = (v) => {
 
 const day = (v) => (/^\d{4}-\d{2}-\d{2}/.test(String(v)) ? String(v).slice(0, 10) : "");
 
-const syncContact = (contacts, name, phone, address) => {
-    if (!name) return 0;
+const upsertContact = (contacts, { name, phone = "", ...fields }) => {
     const digits = digitsOf(phone);
     const found = contacts.find((c) => (digits ? digitsOf(c.phone) === digits : c.name === name));
     if (!found) {
-        contacts.push({ id: genId(), name, phone, address });
-        return 1;
+        contacts.push({ id: genId(), name, phone, ...fields });
+        return "added";
     }
-    if (!address || found.address === address) return 0;
-    found.address = address;
-    return 1;
+    const changed = Object.entries(fields).filter(([k, v]) => v && found[k] !== v);
+    changed.forEach(([k, v]) => (found[k] = v));
+    return changed.length ? "updated" : "same";
 };
 
 const syncSaleContacts = async (prev, body, sale) => {
     const touched = (keys) => keys.some((k) => k in body && body[k] !== prev[k]);
     const people = [
-        touched(["receiverName", "receiverPhone", "address"]) && [sale.receiverName, sale.receiverPhone, sale.address],
-        touched(["senderName", "senderPhone"]) && [sale.senderName, sale.senderPhone, ""],
+        touched(["receiverName", "receiverPhone", "address"]) && { name: sale.receiverName, phone: sale.receiverPhone, address: sale.address },
+        touched(["senderName", "senderPhone"]) && sale.senderName && { name: sale.senderName, phone: sale.senderPhone },
     ].filter(Boolean);
     if (!people.length) return null;
     const contacts = await store.readList("addresses");
-    return people.reduce((n, p) => n + syncContact(contacts, ...p), 0) ? contacts : null;
+    return people.map((p) => upsertContact(contacts, p)).some((r) => r !== "same") ? contacts : null;
 };
 
 const send = (res, status, data) => {
@@ -817,6 +816,17 @@ const handleApi = async (req, res, parts) => {
     if (collection in LISTS) {
         const list = await store.readList(collection);
         if (method === "GET") return send(res, 200, list);
+        if (collection === "addresses" && id === "import" && method === "POST") {
+            const { rows } = await readBody(req);
+            if (!Array.isArray(rows)) return send(res, 400, { error: "가져올 행이 없습니다" });
+            const counts = { added: 0, updated: 0, same: 0, invalid: 0 };
+            for (const row of rows) {
+                const contact = normalize("addresses", row && typeof row === "object" ? row : {});
+                counts[contact.name ? upsertContact(list, contact) : "invalid"]++;
+            }
+            if (counts.added || counts.updated) await store.writeList("addresses", list);
+            return send(res, 200, { contacts: list, ...counts });
+        }
         if (method === "DELETE" && id) {
             await store.writeList(collection, list.filter((x) => x.id !== id));
             return send(res, 200, { ok: true });

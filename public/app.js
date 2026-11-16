@@ -129,7 +129,7 @@ const bankOptions = () => DB.banks.map((b) => ({ value: b.id, label: b.name }));
 const card = (inner) => `<div class="bg-white rounded-xl shadow-sm border border-slate-200 p-4">${inner}</div>`;
 
 const sectionHeader = (title, btnLabel, onClick, resetFn = "", extra = "") =>
-    `<div class="flex items-center justify-between mb-4">
+    `<div class="flex flex-wrap items-center justify-between gap-2 mb-4">
         <h2 class="text-lg font-bold text-slate-700">${title}</h2>
         <div class="flex items-center gap-3">
             ${resetFn ? `<button onclick="${resetFn}" class="text-xs text-slate-400 hover:text-red-500 hover:underline">🗑️ 초기화</button>` : ""}
@@ -1993,9 +1993,10 @@ let CONTACTS = [];
 let SALES = [];
 
 const ADDRESS_FIELDS = [
-    { name: "name", label: "이름", required: true },
-    { name: "phone", label: "연락처", type: "tel" },
-    { name: "address", label: "주소" },
+    { name: "name", label: "이름", required: true, aliases: ["성명", "고객명"] },
+    { name: "phone", label: "연락처", type: "tel", aliases: ["전화번호", "휴대폰", "핸드폰"] },
+    { name: "address", label: "주소", aliases: [] },
+    { name: "memo", label: "메모", aliases: ["비고"] },
 ];
 
 const findAddress = (id) => CONTACTS.find((a) => a.id === id);
@@ -2034,7 +2035,7 @@ async function loadAddresses() {
 function renderAddresses() {
     const count = CONTACTS.length;
     document.getElementById("tab-addresses").innerHTML =
-        sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()", "", count ? excelButton("exportAddresses()") : "") +
+        sectionHeader(`주소록 <span class="text-sm font-normal text-slate-400">${count}명</span>`, "+ 연락처 추가", "saveAddress()", "", outlineButton("📤 엑셀 등록", "importAddresses()") + (count ? excelButton("exportAddresses()") : "")) +
         (count
             ? `<input type="search" value="${esc(addressQuery)}" oninput="filterAddresses(this.value)" placeholder="🔍 이름·연락처·주소 검색" class="w-full mb-4 px-3 py-2 border border-slate-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400" />
                <div id="addressList" class="grid gap-3 md:grid-cols-2"></div>`
@@ -2044,7 +2045,7 @@ function renderAddresses() {
 
 function drawAddressList() {
     const q = searchKey(addressQuery);
-    const list = CONTACTS.filter((a) => !q || searchKey(personLine(a.name, a.phone) + a.address).includes(q)).sort(byName);
+    const list = CONTACTS.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name]).join("")).includes(q)).sort(byName);
     document.getElementById("addressList").innerHTML = list.length
         ? list
               .map(
@@ -2053,6 +2054,7 @@ function drawAddressList() {
                 <div class="min-w-0">
                     <p class="font-bold text-slate-800">${esc(a.name)} <span class="font-normal text-sm ml-1">${telLink(a.phone)}</span></p>
                     ${a.address ? `<p class="text-sm text-slate-600 mt-1 break-words">${esc(a.address)}</p>` : ""}
+                    ${a.memo ? `<p class="text-xs text-slate-500 mt-1 break-words">📝 ${esc(a.memo)}</p>` : ""}
                 </div>
                 ${rowButtons("Address", a.id)}
             </div>`)
@@ -2242,7 +2244,7 @@ const loadXlsx = () =>
     (xlsxLoading ??= new Promise((resolve, reject) =>
         document.head.append(
             Object.assign(document.createElement("script"), {
-                src: "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.mini.min.js",
+                src: "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js",
                 onload: () => resolve(window.XLSX),
                 onerror: () => {
                     xlsxLoading = null;
@@ -2257,9 +2259,9 @@ async function downloadXlsx(filename, sheets) {
         const XLSX = await loadXlsx();
         const book = XLSX.utils.book_new();
         const width = (v) => [...String(v ?? "")].reduce((w, ch) => w + (ch.charCodeAt(0) > 255 ? 2 : 1), 0);
-        for (const [name, rows] of sheets) {
-            const sheet = XLSX.utils.json_to_sheet(rows);
-            sheet["!cols"] = Object.keys(rows[0] || {}).map((k) => ({ wch: Math.min(60, Math.max(...[k, ...rows.map((r) => r[k])].map(width)) + 2) }));
+        for (const [name, rows, header = Object.keys(rows[0] || {})] of sheets) {
+            const sheet = XLSX.utils.json_to_sheet(rows, { header });
+            sheet["!cols"] = header.map((k) => ({ wch: Math.min(60, Math.max(...[k, ...rows.map((r) => r[k])].map(width)) + 2) }));
             XLSX.utils.book_append_sheet(book, sheet, name);
         }
         XLSX.writeFile(book, filename);
@@ -2296,7 +2298,50 @@ function exportSales(month = "") {
     return downloadXlsx(`사과판매_${month || today()}.xlsx`, sheets);
 }
 
-const exportAddresses = () => downloadXlsx(`주소록_${today()}.xlsx`, [["주소록", [...CONTACTS].sort(byName).map((a) => ({ 이름: a.name, 연락처: a.phone, 주소: a.address }))]]);
+const exportAddresses = (template = false) => {
+    const rows = (template ? [] : [...CONTACTS].sort(byName)).map((a) => Object.fromEntries(ADDRESS_FIELDS.map((f) => [f.label, a[f.name] || ""])));
+    return downloadXlsx(template ? "주소록_양식.xlsx" : `주소록_${today()}.xlsx`, [["주소록", rows, ADDRESS_FIELDS.map((f) => f.label)]]);
+};
+
+const contactFromRow = (row) => {
+    const cells = Object.entries(row).map(([header, v]) => [header.replace(/\s/g, ""), v]);
+    const contact = Object.fromEntries(ADDRESS_FIELDS.map((f) => [f.name, cells.find(([header]) => [f.label, ...f.aliases].includes(header))?.[1] ?? ""]));
+    if (typeof contact.phone === "number") contact.phone = `0${contact.phone}`;
+    return contact;
+};
+
+async function importAddresses() {
+    loadXlsx().catch(() => {});
+    const { value: file } = await Swal.fire({
+        title: "엑셀로 주소록 등록",
+        html: `<div class="text-left text-sm text-slate-600 space-y-1.5">
+            <p>첫 줄에 ${ADDRESS_FIELDS.map((f) => `<b>${f.label}</b>${f.required ? "(필수)" : ""}`).join("·")} 머리글이 있는 엑셀 파일을 올려 주세요.</p>
+            <p>연락처가 같은 사람이 이미 있으면 새로 만들지 않고, 엑셀에 적힌 주소·메모로 갱신합니다.</p>
+            <p>${textButton("📥 양식 받기", "exportAddresses(true)", "text-emerald-700")} <span class="text-xs text-slate-400">「📥 엑셀」로 받은 파일을 고쳐서 올려도 됩니다.</span></p>
+        </div>`,
+        input: "file",
+        inputAttributes: { accept: ".xlsx,.xls" },
+        inputValidator: (f) => (f ? undefined : "파일을 선택하세요"),
+        ...SAVE_DIALOG,
+        confirmButtonText: "등록",
+    });
+    if (!file) return;
+    try {
+        const XLSX = await loadXlsx();
+        const book = XLSX.read(await file.arrayBuffer(), { sheets: 0 });
+        const rows = XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { defval: "" }).map(contactFromRow);
+        if (!rows.some((r) => r.name)) throw new Error("이름 열을 찾지 못했습니다. 첫 줄 머리글을 확인하세요");
+        const r = await saveList("addresses/import", null, { rows });
+        Swal.fire({
+            icon: "success",
+            title: "주소록 등록 완료",
+            html: `새로 ${r.added}명 · 갱신 ${r.updated}명 · 변경 없음 ${r.same}명${r.invalid ? `<br><span class="text-xs text-slate-500">이름이 없어 제외한 행 ${r.invalid}개</span>` : ""}`,
+            confirmButtonColor: "#4f46e5",
+        });
+    } catch (e) {
+        toast("error", e.message);
+    }
+}
 
 async function deleteSale(id) {
     if (!(await confirmDelete(`${findSale(id).receiverName}님 판매 기록이 삭제됩니다. 주소록은 그대로 남습니다.`))) return;
