@@ -629,6 +629,33 @@ const manualTxFields = (b, db) => {
 
 const MANUAL_TX_ERROR = "일시·구분·은행(카드)·금액을 확인하세요";
 
+const msAt = (at) => Date.parse(String(at).replace(" ", "T"));
+const byAt = (a, b) => String(a.at).localeCompare(String(b.at));
+
+const matchStatement = (rows, existing) => {
+    const used = new Set();
+    return rows.map((row) => {
+        const match = existing
+            .filter((t) => !used.has(t.id) && t.amount === row.amount && !!t.inflow === row.inflow && day(t.at) === day(row.at))
+            .sort((x, y) => Math.abs(msAt(x.at) - msAt(row.at)) - Math.abs(msAt(y.at) - msAt(row.at)))[0];
+        if (match) used.add(match.id);
+        return { row, match };
+    });
+};
+
+const settleStatementBalance = (db, last, later) => {
+    db.currentBalances = db.currentBalances || {};
+    const cur = db.currentBalances[last.bankId];
+    const realAt = cur && (cur.est ? cur.base : cur.at);
+    if ((realAt && String(realAt) > String(last.at)) || later.some((t) => t.balance != null)) return "older";
+    db.currentBalances[last.bankId] = { amount: last.balance, at: last.at };
+    [...later].sort(byAt).forEach((t) => applyBalance(db, t));
+    const next = db.currentBalances[last.bankId];
+    if (!cur || cur.amount !== next.amount || cur.at !== next.at || !cur.est !== !next.est) return "applied";
+    db.currentBalances[last.bankId] = cur;
+    return "same";
+};
+
 const handleIngest = async (req, res) => {
     if (req.method !== "POST") return send(res, 405, { error: "POST 전용" });
     if (!ingestKey) return send(res, 503, { error: "INGEST_KEY가 설정되지 않았습니다" });
@@ -790,6 +817,39 @@ const handleApi = async (req, res, parts) => {
             const from = p.get("from"), to = p.get("to");
             if (from && to) return send(res, 200, await store.listTransactionsRange(from, to));
             return send(res, 200, await store.listTransactions(p.get("month") || ""));
+        }
+        if (method === "POST" && id === "import") {
+            const b = await readBody(req);
+            const db = await store.readDB();
+            const input = Array.isArray(b.rows) ? b.rows : [];
+            const ordered = String(input[0]?.at) > String(input.at(-1)?.at) ? [...input].reverse() : input;
+            const rows = ordered.map((r) => manualTxFields({ ...r, kind: r.amount > 0 ? "입금" : "출금", amount: Math.abs(r.amount), bankId: b.bankId }, db)).filter(Boolean).sort(byAt);
+            if (!rows.length) return send(res, 400, { error: "가져올 거래가 없습니다. 은행과 엑셀 내용을 확인하세요" });
+            const last = rows.at(-1);
+            const nearby = (await store.listTransactionsRange(rows[0].at.slice(0, 10), "9999-12-31")).filter((t) => t.bankId === last.bankId && t.status === "ok" && BALANCE_KINDS.includes(t.kind));
+            const plan = matchStatement(rows, nearby);
+            const matched = new Set(plan.map((p) => p.match?.id));
+            const later = nearby.filter((t) => String(t.at) > String(last.at) && !matched.has(t.id));
+            const target = b.commit ? db : structuredClone(db);
+            const balanceResult = last.balance == null ? "" : settleStatementBalance(target, last, later);
+            const settled = balanceResult === "applied";
+            if (b.commit) {
+                const patchMatch = ({ row, match }) => {
+                    const patch = { ...(match.balance == null && row.balance != null && { balance: row.balance }), ...(settled && { undoBalance: null }) };
+                    return Object.keys(patch).length && store.updateTransaction(match.id, patch);
+                };
+                await Promise.all([
+                    ...plan.map((p) => (p.match ? patchMatch(p) : store.addTransaction({ id: genId(), ...p.row, imported: true, undoBalance: null }))),
+                    ...(settled ? later.map((t) => store.updateTransaction(t.id, { undoBalance: t.undoBalance })) : []),
+                    settled && store.writeDB(db),
+                ]);
+            }
+            return send(res, 200, {
+                rows: plan.map(({ row, match }) => ({ ...row, match: match ? { at: match.at, title: match.memo || match.title } : null })),
+                skipped: input.length - rows.length,
+                balanceResult,
+                currentBalances: target.currentBalances || {},
+            });
         }
         if (method === "POST") {
             const b = await readBody(req);

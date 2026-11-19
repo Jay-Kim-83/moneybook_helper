@@ -982,7 +982,7 @@ function drawLedger() {
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
-                <span class="flex-1 text-sm text-slate-700 truncate">${t.manual ? "✍️ " : ""}${txLabel(t)}
+                <span class="flex-1 text-sm text-slate-700 truncate">${t.imported ? "📄 " : t.manual ? "✍️ " : ""}${txLabel(t)}
                     ${srcs ? `<span class="text-xs text-slate-400">(${srcs})</span>` : ""}
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                     ${links[t.id] ? `<span class="text-xs text-teal-600">🧳 ${esc(links[t.id])}</span>` : ""}
@@ -1004,6 +1004,7 @@ function drawLedger() {
                 <button onclick="moveLedger(1)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">▶</button>
                 <button onclick="setCycleDay()" title="기준일 설정 (현재 매월 ${cycleDay()}일 시작)" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50 text-sm">⚙</button>
                 <button onclick="resetLedger()" title="거래·수집 데이터 초기화" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-400 hover:text-red-500 hover:bg-red-50 text-sm">🗑️</button>
+                <button onclick="importStatement()" title="은행 거래내역 엑셀 가져오기" class="px-2.5 py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50 text-sm whitespace-nowrap">📥 엑셀</button>
                 <button onclick="saveLedgerTx()" class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-1.5 rounded-lg transition whitespace-nowrap">+ 거래 추가</button>
             </div>
         </div>
@@ -1070,7 +1071,7 @@ async function showTxRaw(i) {
             <p class="mb-2 text-slate-700">📝 ${t.memo ? esc(t.memo) : '<span class="text-slate-400">메모 없음</span>'}
                 <button onclick="editTxMemo(${i})" class="ml-1 text-xs text-indigo-600 hover:underline">수정</button></p>
             ${t.manual
-                ? `<p class="text-xs text-slate-500">✍️ 직접 입력한 거래입니다. <button onclick="editLedgerTx(${i})" class="ml-1 text-xs text-indigo-600 hover:underline">거래 수정</button></p>`
+                ? `<p class="text-xs text-slate-500">${t.imported ? "📄 엑셀 거래내역에서 가져온 거래입니다." : "✍️ 직접 입력한 거래입니다."} <button onclick="editLedgerTx(${i})" class="ml-1 text-xs text-indigo-600 hover:underline">거래 수정</button></p>`
                 : `<pre class="bg-slate-100 rounded-lg p-3 text-xs whitespace-pre-wrap text-slate-700">${esc(t.raw || "(원문 없음)")}</pre>
             <p class="text-xs text-slate-400 mt-2">발신: ${esc(t.sender || "-")}</p>`}
             ${linked ? `<p class="text-xs text-teal-600 mt-2">🧳 ${esc(linked)}에 담긴 거래입니다.</p>` : ""}
@@ -1115,8 +1116,12 @@ const txSourceOptions = (kind, value) =>
         value
     );
 
+const balanceText = (cur) => `${won(cur.amount)}${cur.est ? "(≈ 추정)" : ""}`;
+
+const ledgerAnchorOf = (at) => currentAnchor(cycleDay(), new Date(at.replace(" ", "T")));
+
 const BALANCE_NOTES = {
-    applied: (name, cur) => `${name} 잔액이 ${won(cur.amount)}${cur.est ? "(≈ 추정)" : ""}으로 반영되었습니다`,
+    applied: (name, cur) => `${name} 잔액이 ${balanceText(cur)}으로 반영되었습니다`,
     noCurrent: (name) => `현재 잔액이 없어 ${name} 잔액은 반영하지 않았습니다. ✏️로 잔액을 입력하세요`,
     beforeEstimate: (name, cur) => `${String(cur.base ?? cur.at).slice(5)} 이전 거래라 ${name} 추정 잔액은 그대로입니다. 필요하면 ✏️로 맞추세요`,
     older: (name, cur) => `${cur.at.slice(5)} 잔액이 더 최근이라 ${name} 잔액은 그대로입니다`,
@@ -1173,10 +1178,198 @@ async function saveLedgerTx(t = null) {
     if (!value) return;
     const { transaction, balanceResult, reverted, currentBalances } = await api(t ? "PUT" : "POST", t ? `/api/transactions/${t.id}` : "/api/transactions", value);
     DB.currentBalances = currentBalances;
-    ledgerMonth = currentAnchor(cycleDay(), new Date(value.at.replace(" ", "T")));
+    ledgerMonth = ledgerAnchorOf(value.at);
     await renderLedger();
     const movedFrom = reverted && t.bankId !== transaction.bankId ? `${bankName(t.bankId)} 잔액은 되돌렸습니다` : "";
     toast("success", t ? "거래가 수정되었습니다" : "거래가 추가되었습니다", [balanceNote(transaction, balanceResult), movedFrom].filter(Boolean).join(" · "));
+}
+
+const concatBytes = (...parts) => {
+    const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+    parts.reduce((offset, p) => (out.set(p, offset), offset + p.length), 0);
+    return out;
+};
+
+const le32 = (n) => {
+    const b = new Uint8Array(4);
+    new DataView(b.buffer).setUint32(0, n, true);
+    return b;
+};
+
+const sha1 = async (...parts) => new Uint8Array(await crypto.subtle.digest("SHA-1", concatBytes(...parts)));
+
+async function aesEcbDecrypt(rawKey, data) {
+    const key = await crypto.subtle.importKey("raw", rawKey, "AES-CBC", false, ["encrypt", "decrypt"]);
+    const pad = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-CBC", iv: data.slice(-16) }, key, new Uint8Array(0)));
+    const out = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-CBC", iv: new Uint8Array(16) }, key, concatBytes(data, pad)));
+    for (let i = 16; i < data.length; i++) out[i] ^= data[i - 16];
+    return out;
+}
+
+async function standardEncryptionKey(password, salt, keyLength) {
+    const utf16 = new Uint8Array(password.length * 2);
+    for (let i = 0; i < password.length; i++) new DataView(utf16.buffer).setUint16(i * 2, password.charCodeAt(i), true);
+    let hash = await sha1(salt, utf16);
+    for (let i = 0; i < 50000; i++) hash = await sha1(le32(i), hash);
+    hash = await sha1(hash, le32(0));
+    const derive = (fill) => sha1(new Uint8Array(64).fill(fill).map((b, i) => b ^ (hash[i] ?? 0)));
+    return concatBytes(await derive(0x36), await derive(0x5c)).slice(0, keyLength);
+}
+
+async function decryptWorkbook(XLSX, cfb, password) {
+    const stream = (name) => Uint8Array.from(XLSX.CFB.find(cfb, name)?.content || []);
+    const info = stream("EncryptionInfo"), pkg = stream("EncryptedPackage");
+    const view = new DataView(info.buffer);
+    if (!pkg.length || view.getUint16(2, true) !== 2) throw new Error("이 파일의 암호 방식은 지원하지 않습니다. 엑셀에서 암호를 풀어 저장한 파일을 올려 주세요");
+    if (!password) throw new Error("암호가 걸린 파일입니다. 파일 비밀번호를 입력하세요");
+    const verifierAt = 12 + view.getUint32(8, true);
+    const saltEnd = verifierAt + 4 + view.getUint32(verifierAt, true);
+    const key = await standardEncryptionKey(password, info.slice(verifierAt + 4, saltEnd), view.getUint32(28, true) / 8);
+    const verifier = await aesEcbDecrypt(key, info.slice(saltEnd, saltEnd + 16));
+    const verifierHash = await aesEcbDecrypt(key, info.slice(saltEnd + 20, saltEnd + 52));
+    if ((await sha1(verifier)).some((b, i) => b !== verifierHash[i])) throw new Error("파일 비밀번호가 맞지 않습니다");
+    const size = Number(new DataView(pkg.buffer).getBigUint64(0, true));
+    return (await aesEcbDecrypt(key, pkg.slice(8, 8 + Math.floor((pkg.length - 8) / 16) * 16))).slice(0, size);
+}
+
+async function readSheetRows(file, password) {
+    const XLSX = await loadXlsx();
+    let bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes[0] === 0xd0 && bytes[1] === 0xcf) {
+        const cfb = XLSX.CFB.read(bytes, { type: "array" });
+        if (XLSX.CFB.find(cfb, "EncryptionInfo")) bytes = await decryptWorkbook(XLSX, cfb, password);
+    }
+    const book = XLSX.read(bytes, { type: "array", cellDates: true });
+    return XLSX.utils.sheet_to_json(book.Sheets[book.SheetNames[0]], { header: 1, defval: "" });
+}
+
+const STATEMENT_COLUMNS = {
+    at: [/일시|일자|거래일|날짜/],
+    time: [/시간|시각/],
+    amount: [/금액/, /입금|출금|맡기신|찾으신|잔액/],
+    inflow: [/입금|맡기신/, /구분|유형|잔액|후/],
+    outflow: [/출금|찾으신|지급/, /구분|유형|잔액|후/],
+    balance: [/잔액/],
+    type: [/유형|구분/],
+    title: [/적요|내용|거래처|받는분|보낸분|기재|상대/],
+};
+
+const cellText = (v) => (v instanceof Date ? stampNow(new Date(Math.round(v.getTime() / 1000) * 1000)) : String(v ?? "").trim());
+
+const statementNumber = (v) => toNum(cellText(v).replace(/[−–]/g, "-"));
+
+const statementAt = (date, time) => {
+    const d = cellText(date).match(/(\d{4})\D+(\d{1,2})\D+(\d{1,2})(?:\D+(\d{1,2}):(\d{2}))?/);
+    if (!d) return "";
+    const hm = cellText(time).match(/(\d{1,2}):(\d{2})/) || (d[4] ? [, d[4], d[5]] : [, "0", "00"]);
+    return `${d[1]}-${pad0(d[2])}-${pad0(d[3])} ${pad0(hm[1])}:${hm[2]}`;
+};
+
+function parseStatement(matrix) {
+    const headerRow = matrix.findIndex((row) => row.some((c) => STATEMENT_COLUMNS.at[0].test(cellText(c))) && row.some((c) => /잔액/.test(cellText(c))));
+    if (headerRow < 0) throw new Error("「거래일시」와 「잔액」 머리글을 찾지 못했습니다");
+    const header = matrix[headerRow].map((c) => cellText(c).replace(/\s/g, ""));
+    const col = Object.fromEntries(Object.entries(STATEMENT_COLUMNS).map(([key, [re, not]]) => [key, header.findIndex((h) => re.test(h) && !not?.test(h))]));
+    if (col.amount < 0 && col.inflow < 0 && col.outflow < 0) throw new Error(`금액 열을 찾지 못했습니다 (머리글: ${header.filter(Boolean).join(", ")})`);
+    const rows = matrix
+        .slice(headerRow + 1)
+        .map((r) => ({
+            at: statementAt(r[col.at], r[col.time]),
+            amount: col.amount >= 0 ? statementNumber(r[col.amount]) : statementNumber(r[col.inflow]) - statementNumber(r[col.outflow]),
+            balance: cellText(r[col.balance]) === "" ? null : statementNumber(r[col.balance]),
+            title: cellText(r[col.title]),
+            type: cellText(r[col.type]),
+        }))
+        .filter((r) => r.at && r.amount);
+    if (col.amount >= 0 && rows.every((r) => r.amount > 0)) {
+        const chrono = String(rows[0]?.at) > String(rows.at(-1)?.at) ? [...rows].reverse() : rows;
+        chrono.forEach((r, i) => {
+            const prev = chrono[i - 1];
+            const outflow = prev?.balance != null && r.balance != null ? r.balance < prev.balance : /출금|지급|결제|송금|납부|인출/.test(r.type);
+            if (outflow) r.amount = -r.amount;
+        });
+    }
+    return rows.map(({ type, ...r }) => r);
+}
+
+async function importStatement() {
+    loadXlsx().catch(() => {});
+    const { value } = await Swal.fire({
+        title: "📥 거래내역 엑셀 가져오기",
+        html: `<div class="text-left text-sm">
+            ${fieldLabel("은행")}
+            <select id="st_bank" class="swal2-input !m-0 !w-full !flex">${optionTags([{ value: "", label: "선택하세요" }, ...bankOptions("🏦 ")], ledgerBank)}</select>
+            ${fieldLabel("엑셀 파일")}
+            <input id="st_file" type="file" accept=".xlsx,.xls" class="block w-full text-sm text-slate-600" />
+            ${fieldLabel("파일 비밀번호 (암호가 걸린 파일만)")}
+            <input id="st_password" type="password" autocomplete="off" class="swal2-input !m-0 !w-full" />
+            <p class="text-xs text-slate-400 mt-2">은행 앱에서 받은 거래내역 엑셀을 올리면 장부에 없는 거래만 추가하고, 마지막 거래 후 잔액으로 현재 잔액을 맞춥니다. 저장 전에 확인 화면을 보여 줍니다. 비밀번호는 이 브라우저에서 파일을 여는 데만 쓰고 서버로 보내지 않습니다.</p>
+        </div>`,
+        ...SAVE_DIALOG,
+        confirmButtonText: "확인하기",
+        showLoaderOnConfirm: true,
+        didOpen: () => {
+            document.getElementById("st_file").onchange = (e) => {
+                const name = (e.target.files[0]?.name || "").replace(/\s/g, "");
+                const bank = DB.banks.find((b) => name.includes(b.name.replace(/\s/g, "")));
+                if (bank) document.getElementById("st_bank").value = bank.id;
+            };
+        },
+        preConfirm: async () => {
+            const bankId = document.getElementById("st_bank").value;
+            const file = document.getElementById("st_file").files[0];
+            if (!bankId || !file) return validated(bankId ? "엑셀 파일을 선택하세요" : "은행을 선택하세요");
+            try {
+                const rows = parseStatement(await readSheetRows(file, document.getElementById("st_password").value));
+                if (!rows.length) throw new Error("가져올 거래 행이 없습니다");
+                return { bankId, rows, preview: await api("POST", "/api/transactions/import", { bankId, rows }) };
+            } catch (e) {
+                return validated(e.message);
+            }
+        },
+    });
+    if (!value) return;
+    const { bankId, rows, preview } = value;
+    const added = preview.rows.filter((r) => !r.match).length;
+    const applied = preview.balanceResult === "applied";
+    const actionable = added > 0 || applied;
+    const cur = preview.currentBalances[bankId];
+    const balanceLine =
+        {
+            applied: () => `현재 잔액을 ${balanceText(cur)}으로 맞춥니다.`,
+            same: () => `현재 잔액(${won(cur.amount)})이 엑셀과 이미 같습니다.`,
+            older: () => "장부에 엑셀보다 최근 실제 잔액이 있어 현재 잔액은 그대로 둡니다.",
+        }[preview.balanceResult]?.() || "엑셀에 잔액이 없어 현재 잔액은 그대로 둡니다.";
+    const list = [...preview.rows]
+        .reverse()
+        .map(
+            (r) => `<div class="flex items-center gap-2 py-1.5 border-b border-slate-100 last:border-0 ${r.match ? "text-slate-400" : "text-slate-700"}">
+                <span class="text-[11px] tabular-nums w-20 shrink-0">${r.at.slice(5)}</span>
+                <span class="flex-1 truncate">${esc(r.title)}</span>
+                <span class="text-[11px] shrink-0">${r.match ? `있음 ${r.match.at.slice(5)}` : '<b class="text-indigo-600">새로 추가</b>'}</span>
+                <span class="tabular-nums font-bold shrink-0 ${r.match ? "" : r.inflow ? "text-green-600" : "text-red-500"}">${r.inflow ? "+" : "−"}${won(r.amount)}</span>
+            </div>`
+        )
+        .join("");
+    const { isConfirmed } = await Swal.fire({
+        title: `🏦 ${esc(bankName(bankId))} 가져오기 확인`,
+        html: `<div class="text-left text-sm">
+            <p class="mb-1">엑셀 ${preview.rows.length}건 중 <b class="text-indigo-600">새로 추가 ${added}건</b> · 이미 있음 ${preview.rows.length - added}건${preview.skipped ? ` · 읽지 못한 행 ${preview.skipped}개` : ""}</p>
+            <p class="mb-2 text-slate-600">${balanceLine}</p>
+            <div class="max-h-80 overflow-y-auto pr-1">${list}</div>
+        </div>`,
+        width: 640,
+        ...SAVE_DIALOG,
+        showCancelButton: actionable,
+        confirmButtonText: added ? `${added}건 가져오기` : applied ? "잔액 맞추기" : "닫기",
+    });
+    if (!isConfirmed || !actionable) return;
+    const result = await api("POST", "/api/transactions/import", { bankId, rows, commit: true });
+    DB.currentBalances = result.currentBalances;
+    ledgerBank = bankId;
+    ledgerMonth = ledgerAnchorOf(result.rows.at(-1).at);
+    await renderLedger();
+    toast("success", `${result.rows.filter((r) => !r.match).length}건을 가져왔습니다`, balanceNote({ bankId }, result.balanceResult));
 }
 
 const prevMonth = (ym) => {
@@ -1198,10 +1391,7 @@ function moveMonthly(dir) {
 const isCurrentCycle = () => selectedMonth === currentAnchor(cycleDay());
 const isLiveCycle = () => isCurrentCycle() && !Object.keys(window._transfersDone || {}).length;
 
-const stampNow = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${pad0(d.getMonth() + 1)}-${pad0(d.getDate())} ${pad0(d.getHours())}:${pad0(d.getMinutes())}`;
-};
+const stampNow = (d = new Date()) => `${d.getFullYear()}-${pad0(d.getMonth() + 1)}-${pad0(d.getDate())} ${pad0(d.getHours())}:${pad0(d.getMinutes())}`;
 
 const today = () => stampNow().slice(0, 10);
 
