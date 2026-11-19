@@ -101,10 +101,15 @@ const fileStore = {
         all.push(tx);
         fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all, null, 4));
     },
+    async getTransaction(id) {
+        if (!fs.existsSync(TRANSACTIONS_PATH)) return null;
+        return parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8")).find((t) => t.id === id) || null;
+    },
     async deleteTransaction(id) {
-        if (!fs.existsSync(TRANSACTIONS_PATH)) return;
+        if (!fs.existsSync(TRANSACTIONS_PATH)) return null;
         const all = parseJson(fs.readFileSync(TRANSACTIONS_PATH, "utf-8"));
         fs.writeFileSync(TRANSACTIONS_PATH, JSON.stringify(all.filter((t) => t.id !== id), null, 4));
+        return all.find((t) => t.id === id) || null;
     },
     async updateTransaction(id, patch) {
         if (!fs.existsSync(TRANSACTIONS_PATH)) return null;
@@ -195,8 +200,13 @@ const createPgStore = () => {
         async addTransaction(tx) {
             await q("INSERT INTO transactions(id, data) VALUES($1, $2) ON CONFLICT (id) DO NOTHING", [tx.id, JSON.stringify(tx)]);
         },
+        async getTransaction(id) {
+            const { rows } = await q("SELECT data FROM transactions WHERE id = $1", [id]);
+            return rows[0]?.data || null;
+        },
         async deleteTransaction(id) {
-            await q("DELETE FROM transactions WHERE id = $1", [id]);
+            const { rows } = await q("DELETE FROM transactions WHERE id = $1 RETURNING data", [id]);
+            return rows[0]?.data || null;
         },
         async updateTransaction(id, patch) {
             const { rows } = await q("UPDATE transactions SET data = data || $2::jsonb WHERE id = $1 RETURNING data", [id, JSON.stringify(patch)]);
@@ -564,21 +574,60 @@ const bearerToken = (req) => {
 
 const ingestAuthed = (req) => !!ingestKey && safeEqual(bearerToken(req), ingestKey);
 
+const BALANCE_KINDS = ["입금", "출금", "이체"];
+const signedAmount = (tx) => (tx.inflow ? tx.amount : -tx.amount);
+const estimateBase = (cur) => cur.base ?? cur.at;
+const laterAt = (a, b) => (String(a) > String(b) ? a : b);
+
 const applyBalance = (db, tx, force = false) => {
-    if (!tx.bankId || tx.status !== "ok") return false;
+    tx.undoBalance = null;
+    if (!tx.bankId || tx.status !== "ok") return "";
     db.currentBalances = db.currentBalances || {};
     const cur = db.currentBalances[tx.bankId];
     if (tx.balance != null) {
-        const chained = cur && tx.balance === cur.amount + (tx.inflow ? tx.amount : -(tx.amount || 0));
+        const chained = cur && tx.balance === cur.amount + signedAmount(tx);
         const newer = !cur || String(tx.at) > String(cur.at) || (String(tx.at) === String(cur.at) && (chained || cur.est)) || (force && cur.est);
-        if (!newer) return false;
-        db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur && String(cur.at) > String(tx.at) ? cur.at : tx.at };
+        if (!newer) return "older";
+        if (tx.manual) tx.undoBalance = { prev: cur ?? null };
+        db.currentBalances[tx.bankId] = { amount: tx.balance, at: cur ? laterAt(cur.at, tx.at) : tx.at };
+        return "applied";
+    }
+    if (tx.amount == null || !BALANCE_KINDS.includes(tx.kind)) return "";
+    if (!cur) return "noCurrent";
+    if (String(tx.at) < String(estimateBase(cur))) return cur.est ? "beforeEstimate" : "older";
+    tx.undoBalance = { delta: signedAmount(tx) };
+    db.currentBalances[tx.bankId] = { amount: cur.amount + tx.undoBalance.delta, at: laterAt(cur.at, tx.at), est: true, base: estimateBase(cur) };
+    return "applied";
+};
+
+const legacyManualUndo = (tx) => (tx.manual && tx.balance == null && BALANCE_KINDS.includes(tx.kind) ? { delta: signedAmount(tx) } : null);
+
+const revertBalance = (db, tx) => {
+    const cur = db.currentBalances?.[tx.bankId];
+    const undo = "undoBalance" in tx ? tx.undoBalance : legacyManualUndo(tx);
+    if (!cur || !undo) return false;
+    if ("delta" in undo) {
+        if (!cur.est || String(tx.at) < String(estimateBase(cur))) return false;
+        cur.amount -= undo.delta;
         return true;
     }
-    if (tx.amount == null || !["입금", "출금", "이체"].includes(tx.kind) || !cur || String(tx.at) < String(cur.at)) return false;
-    db.currentBalances[tx.bankId] = { amount: cur.amount + (tx.inflow ? tx.amount : -tx.amount), at: tx.at, est: true };
+    if (cur.est || cur.at !== tx.at || cur.amount !== tx.balance) return false;
+    if (undo.prev) db.currentBalances[tx.bankId] = undo.prev;
+    else delete db.currentBalances[tx.bankId];
     return true;
 };
+
+const manualTxFields = (b, db) => {
+    const amount = Math.round(Number(b.amount)) || 0;
+    const balance = b.kind === "카드" || b.balance == null ? null : Math.round(Number(b.balance));
+    const cardObj = b.kind === "카드" ? db.cards.find((c) => c.id === b.cardId) : null;
+    const bankId = cardObj ? cardObj.bankId || null : db.banks.find((x) => x.id === b.bankId)?.id || null;
+    const valid = ["입금", "출금", "카드"].includes(b.kind) && amount > 0 && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(String(b.at)) && !Number.isNaN(balance) && (cardObj || bankId);
+    if (!valid) return null;
+    return { kind: b.kind, amount, title: String(b.title || "").trim() || b.kind, bankId, cardId: cardObj?.id || null, balance, inflow: b.kind === "입금", at: b.at, status: "ok", manual: true };
+};
+
+const MANUAL_TX_ERROR = "일시·구분·은행(카드)·금액을 확인하세요";
 
 const handleIngest = async (req, res) => {
     if (req.method !== "POST") return send(res, 405, { error: "POST 전용" });
@@ -636,9 +685,9 @@ const handleIngest = async (req, res) => {
             }
         }
     }
+    let dirty = applyBalance(db, tx, dedupForce) === "applied";
     if (dedupForce) await store.updateTransaction(tx.id, tx);
     else if (!skipStore) await store.addTransaction(tx);
-    let dirty = applyBalance(db, tx, dedupForce);
     if (tx.cardId && tx.status === "ok") {
         db.cardStats = db.cardStats || {};
         const s = (db.cardStats[tx.cardId] = db.cardStats[tx.cardId] || {});
@@ -744,37 +793,37 @@ const handleApi = async (req, res, parts) => {
         }
         if (method === "POST") {
             const b = await readBody(req);
-            const amount = Math.round(Number(b.amount)) || 0;
-            const balance = b.kind === "카드" || b.balance == null ? null : Math.round(Number(b.balance));
-            if (!["입금", "출금", "카드"].includes(b.kind) || amount <= 0 || !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(String(b.at)) || Number.isNaN(balance))
-                return send(res, 400, { error: "일시·구분·금액을 확인하세요" });
             const db = await store.readDB();
-            const cardObj = b.kind === "카드" ? db.cards.find((c) => c.id === b.cardId) : null;
-            const tx = {
-                id: genId(),
-                kind: b.kind,
-                amount,
-                title: String(b.title || "").trim() || b.kind,
-                bankId: cardObj ? cardObj.bankId || null : db.banks.find((x) => x.id === b.bankId)?.id || null,
-                cardId: cardObj?.id || null,
-                balance,
-                inflow: b.kind === "입금",
-                at: b.at,
-                status: "ok",
-                manual: true,
-            };
-            await Promise.all([store.addTransaction(tx), applyBalance(db, tx) && store.writeDB(db)]);
-            return send(res, 200, { transaction: tx, currentBalance: db.currentBalances?.[tx.bankId] || null });
+            const fields = manualTxFields(b, db);
+            if (!fields) return send(res, 400, { error: MANUAL_TX_ERROR });
+            const tx = { id: genId(), ...fields };
+            const balanceResult = applyBalance(db, tx);
+            await Promise.all([store.addTransaction(tx), balanceResult === "applied" && store.writeDB(db)]);
+            return send(res, 200, { transaction: tx, balanceResult, currentBalances: db.currentBalances || {} });
         }
         if (method === "PUT" && id) {
             const b = await readBody(req);
-            const tx = await store.updateTransaction(id, { memo: String(b.memo || "").trim() });
-            return tx ? send(res, 200, tx) : send(res, 404, { error: "거래를 찾을 수 없습니다" });
+            if (!("kind" in b)) {
+                const tx = await store.updateTransaction(id, { memo: String(b.memo || "").trim() });
+                return tx ? send(res, 200, tx) : send(res, 404, { error: "거래를 찾을 수 없습니다" });
+            }
+            const [db, old] = await Promise.all([store.readDB(), store.getTransaction(id)]);
+            if (!old) return send(res, 404, { error: "거래를 찾을 수 없습니다" });
+            if (!old.manual) return send(res, 400, { error: "직접 추가한 거래만 수정할 수 있습니다" });
+            const fields = manualTxFields(b, db);
+            if (!fields) return send(res, 400, { error: MANUAL_TX_ERROR });
+            const reverted = revertBalance(db, old);
+            const next = { ...old, ...fields };
+            const balanceResult = applyBalance(db, next);
+            await Promise.all([store.updateTransaction(id, next), (reverted || balanceResult === "applied") && store.writeDB(db)]);
+            return send(res, 200, { transaction: next, balanceResult, reverted, currentBalances: db.currentBalances || {} });
         }
         if (method === "DELETE") {
             if (id) {
-                await store.deleteTransaction(id);
-                return send(res, 200, { ok: true });
+                const [db, old] = await Promise.all([store.readDB(), store.deleteTransaction(id)]);
+                const reverted = !!old && revertBalance(db, old);
+                if (reverted) await store.writeDB(db);
+                return send(res, 200, { ok: true, reverted, currentBalances: db.currentBalances || {} });
             }
             await store.clearTransactions();
             const db = await store.readDB();
