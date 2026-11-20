@@ -2477,6 +2477,7 @@ const SALE_SORTS = {
     new: ["최신순", byNewest],
     old: ["오래된순", bySaleDate, true],
     name: ["받는 사람순", (a, b) => koCompare(a.receiverName, b.receiverName) || byNewest(a, b)],
+    sender: ["보낸 사람순", (a, b) => !a.senderName - !b.senderName || koCompare(a.senderName, b.senderName) || byNewest(a, b)],
     amount: ["금액 높은순", (a, b) => b.amount - a.amount || byNewest(a, b)],
     unpaid: ["미입금 먼저", (a, b) => a.paid - b.paid || byNewest(a, b)],
 };
