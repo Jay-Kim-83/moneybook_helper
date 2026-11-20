@@ -2474,19 +2474,19 @@ const bySaleDate = (a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(
 const byNewest = (a, b) => bySaleDate(b, a);
 
 const SALE_SORTS = {
+    sender: ["보낸 사람순", (a, b) => !a.senderName - !b.senderName || koCompare(a.senderName, b.senderName) || byNewest(a, b)],
     new: ["최신순", byNewest],
     old: ["오래된순", bySaleDate, true],
     name: ["받는 사람순", (a, b) => koCompare(a.receiverName, b.receiverName) || byNewest(a, b)],
-    sender: ["보낸 사람순", (a, b) => !a.senderName - !b.senderName || koCompare(a.senderName, b.senderName) || byNewest(a, b)],
     amount: ["금액 높은순", (a, b) => b.amount - a.amount || byNewest(a, b)],
     unpaid: ["미입금 먼저", (a, b) => a.paid - b.paid || byNewest(a, b)],
 };
 
-const saleView = { year: "", month: "", sort: savedChoice("saleSort", SALE_SORTS) };
+const saleView = { year: "", month: "", sort: savedChoice("saleOrder", SALE_SORTS) };
 
 const setSaleView = (key, v) => {
     saleView[key] = v;
-    if (key === "sort") saveChoice("saleSort", v);
+    if (key === "sort") saveChoice("saleOrder", v);
     drawSales();
 };
 
@@ -2552,7 +2552,7 @@ async function renderSales() {
 
 function drawSales() {
     const el = document.getElementById("tab-sales");
-    const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()", "", SALES.length ? excelButton("exportSales()") : "");
+    const header = sectionHeader("사과 판매", "+ 판매 등록", "addSale()", "", outlineButton("🔄 들에촌愛", "syncApplebook()", "border-red-300 text-red-600 hover:bg-red-50") + (SALES.length ? excelButton("exportSales()") : ""));
     if (!SALES.length) {
         el.innerHTML = header + `<div class="grid gap-4">${priceCard()}${emptyState("등록된 판매 기록이 없습니다.")}</div>`;
         return;
@@ -2672,24 +2672,67 @@ async function saleModal(s) {
 }
 
 async function putSale(id, body) {
-    const { item, contacts } = await saveList("sales", id, body);
-    SALES = withItem(SALES, item);
+    const res = await saveList("sales", id, body);
+    SALES = withItem(SALES, res.item);
     drawSales();
-    return contacts;
+    return res;
 }
+
+const saleToast = ({ applebook }, message) => {
+    if (applebook?.error) return toast("warning", "들에촌愛에 반영하지 못했습니다", `${applebook.error} · 「🔄 들에촌愛」로 다시 맞출 수 있습니다`);
+    if (message) toast("success", message + (applebook ? " · 들에촌愛 반영" : ""));
+};
 
 async function submitSale(id, base) {
     const v = await saleModal(base);
     if (!v) return;
-    const contacts = await putSale(id, v);
-    toast("success", `저장되었습니다${contacts ? " · 주소록 반영" : ""}`);
+    const res = await putSale(id, v);
+    saleToast(res, `저장되었습니다${res.contacts ? " · 주소록 반영" : ""}`);
 }
 
 const addSale = () => submitSale(null, { date: today() });
 
 const editSale = (id) => submitSale(id, findSale(id));
 
-const toggleSalePaid = (id, paid) => putSale(id, { paid, paidDate: paid ? today() : "" });
+const toggleSalePaid = async (id, paid) => saleToast(await putSale(id, { paid, paidDate: paid ? today() : "" }));
+
+const SALE_LABELS = { date: "날짜", senderName: "보내는 사람", senderPhone: "보내는 사람 연락처", receiverName: "받는 사람", receiverPhone: "받는 사람 연락처", address: "주소", product: "상품", qty: "수량(박스)", price: "단가", amount: "금액", paid: "입금", paidDate: "입금일", memo: "메모" };
+
+const APPLEBOOK_STEPS = [
+    ["added", "새로 추가"],
+    ["linked", "들에촌愛에 있던 같은 주문과 연결"],
+    ["updated", "내용 맞춤"],
+    ["removed", "들에촌愛에서 삭제"],
+];
+
+async function syncApplebook() {
+    try {
+        const plan = await api("POST", "/api/sales/applebook", { dryRun: true });
+        const line = (s) => `<li class="py-1.5 border-b border-slate-100 last:border-0">
+            <span class="text-xs text-slate-400 tabular-nums mr-1">${mmdd(s.date)}</span><b>${esc(s.receiverName)}</b>${s.senderName ? ` <span class="text-xs text-slate-500">보낸 사람 ${esc(s.senderName)}</span>` : ""} <span class="tabular-nums">${won(s.amount)}</span>
+            ${s.changes.length ? `<p class="text-xs text-amber-600">바뀌는 칸: ${s.changes.map((k) => SALE_LABELS[k]).join(", ")}</p>` : ""}
+        </li>`;
+        const steps = APPLEBOOK_STEPS.filter(([k]) => plan[k].length);
+        const notes = [plan.same && `이미 같음 ${plan.same}건`, plan.kept && `들에촌愛에서 지운 ${plan.kept}건은 그대로 둠`].filter(Boolean).join(" · ");
+        if (!steps.length) return toast("success", "들에촌愛와 이미 같습니다", notes);
+        const { isConfirmed } = await Swal.fire({
+            title: "🔄 들에촌愛 동기화 확인",
+            html: `<div class="text-left text-sm max-h-[60vh] overflow-y-auto overscroll-contain pr-1">
+                ${steps.map(([k, label]) => `<p class="font-bold text-slate-700 mt-3 first:mt-0">${label} ${plan[k].length}건</p><ul>${plan[k].map(line).join("")}</ul>`).join("")}
+                ${notes ? `<p class="text-xs text-slate-500 mt-3">${notes}</p>` : ""}
+                <p class="text-xs text-slate-400 mt-2">가계부 판매를 기준으로 맞춥니다. 들에촌愛에서 직접 등록한 판매는 건드리지 않습니다.</p>
+            </div>`,
+            width: 560,
+            ...SAVE_DIALOG,
+            confirmButtonText: "동기화",
+        });
+        if (!isConfirmed) return;
+        await api("POST", "/api/sales/applebook", { dryRun: false });
+        toast("success", "들에촌愛에 반영했습니다");
+    } catch (e) {
+        toast("error", "들에촌愛 동기화 실패", e.message);
+    }
+}
 
 const copySale = (id) => {
     const s = findSale(id);
@@ -2735,21 +2778,7 @@ function exportSales(month = "") {
     const list = month ? SALES.filter((s) => s.date.startsWith(month)) : filteredSales();
     const rows = visibleSaleGroups(list)
         .flatMap(([, items]) => items)
-        .map((s) => ({
-            날짜: s.date,
-            "보내는 사람": s.senderName,
-            "보내는 사람 연락처": s.senderPhone,
-            "받는 사람": s.receiverName,
-            "받는 사람 연락처": s.receiverPhone,
-            주소: s.address,
-            상품: s.product,
-            "수량(박스)": s.qty,
-            단가: s.price,
-            금액: s.amount,
-            입금: s.paid ? "입금" : "미입금",
-            입금일: s.paidDate,
-            메모: s.memo,
-        }));
+        .map((s) => ({ ...Object.fromEntries(Object.entries(SALE_LABELS).map(([k, label]) => [label, s[k]])), 입금: s.paid ? "입금" : "미입금" }));
     const sheets = [["판매 내역", rows]];
     if (!month) {
         const summary = monthTotals(list).map((t) => ({ 월: t.month, 건수: t.count, "수량(박스)": t.qty, 금액: t.amount, "미입금 건수": t.unpaidCount, "미입금 금액": t.unpaid }));
@@ -2806,10 +2835,10 @@ async function importAddresses() {
 
 async function deleteSale(id) {
     if (!(await confirmDelete(`${findSale(id).receiverName}님 판매 기록이 삭제됩니다. 주소록은 그대로 남습니다.`))) return;
-    await api("DELETE", `/api/sales/${id}`);
+    const res = await api("DELETE", `/api/sales/${id}`);
     SALES = SALES.filter((s) => s.id !== id);
     drawSales();
-    toast("success", "판매 기록이 삭제되었습니다");
+    saleToast(res, "판매 기록이 삭제되었습니다");
 }
 
 function renderAll() {

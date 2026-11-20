@@ -256,6 +256,24 @@ const decryptText = (blob) => {
     return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
 };
 
+const APPLEBOOK_URL = (process.env.APPLEBOOK_URL || "https://apple.deulechon-love.workers.dev").replace(/\/+$/, "");
+const APPLEBOOK_SYNC_KEY = (process.env.APPLEBOOK_SYNC_KEY || "").trim();
+const pushApplebook = async (payload) => {
+    if (!APPLEBOOK_SYNC_KEY) return undefined;
+    try {
+        const r = await fetch(`${APPLEBOOK_URL}/api/sync`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${APPLEBOOK_SYNC_KEY}` },
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(8000),
+        });
+        const data = await r.json().catch(() => ({}));
+        return r.ok ? data : { error: data.error || `들에촌愛 응답 오류 ${r.status}` };
+    } catch (e) {
+        return { error: e.name === "TimeoutError" ? "들에촌愛 응답이 늦습니다" : "들에촌愛에 연결하지 못했습니다" };
+    }
+};
+
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
 const digitsOf = (v) => String(v || "").replace(/\D/g, "");
@@ -933,6 +951,13 @@ const handleApi = async (req, res, parts) => {
     if (collection in LISTS) {
         const list = await store.readList(collection);
         if (method === "GET") return send(res, 200, list);
+        const toApplebook = (payload) => (collection === "sales" ? pushApplebook(payload) : undefined);
+        if (collection === "sales" && id === "applebook" && method === "POST") {
+            if (!APPLEBOOK_SYNC_KEY) return send(res, 503, { error: "Render 환경변수 APPLEBOOK_SYNC_KEY가 설정되지 않았습니다" });
+            const { dryRun } = await readBody(req);
+            const result = await pushApplebook({ sales: list, full: true, dryRun: dryRun !== false });
+            return send(res, result.error ? 502 : 200, result);
+        }
         if (collection === "addresses" && id === "import" && method === "POST") {
             const { rows } = await readBody(req);
             if (!Array.isArray(rows)) return send(res, 400, { error: "가져올 행이 없습니다" });
@@ -946,7 +971,7 @@ const handleApi = async (req, res, parts) => {
         }
         if (method === "DELETE" && id) {
             await store.writeList(collection, list.filter((x) => x.id !== id));
-            return send(res, 200, { ok: true });
+            return send(res, 200, { ok: true, applebook: await toApplebook({ deleted: [id] }) });
         }
         if (method === "POST" || (method === "PUT" && id)) {
             const prev = method === "PUT" ? list.find((x) => x.id === id) : { id: genId() };
@@ -957,7 +982,7 @@ const handleApi = async (req, res, parts) => {
             const next = method === "PUT" ? list.map((x) => (x.id === id ? item : x)) : [...list, item];
             const contacts = collection === "addresses" ? next : collection === "sales" ? await syncSaleContacts(prev, body, item) : null;
             await Promise.all([store.writeList(collection, next), collection === "sales" && contacts && store.writeList("addresses", contacts)]);
-            return send(res, 200, { item, contacts });
+            return send(res, 200, { item, contacts, applebook: await toApplebook({ sales: [item] }) });
         }
     }
 
