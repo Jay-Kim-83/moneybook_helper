@@ -2500,6 +2500,21 @@ const salesByMonth = (list, cmp, asc) => {
 
 const visibleSaleGroups = (list) => salesByMonth(list, ...SALE_SORTS[saleView.sort].slice(1));
 
+const groupBySender = (items) =>
+    items.reduce((groups, s) => {
+        const last = groups.at(-1);
+        if (last?.[0] === s.senderName) last[1].push(s);
+        else groups.push([s.senderName, [s]]);
+        return groups;
+    }, []);
+
+const saleSummary = (items) => {
+    const t = saleTotals(items);
+    return `${items.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}`;
+};
+
+const senderPhones = (items) => [...new Set(items.map((s) => s.senderPhone).filter(Boolean))].map(telLink).join(" ");
+
 const monthOnly = (ym) => `${Number(ym.slice(-2))}월`;
 
 const monthLabel = (ym) => `${ym.slice(0, 4)}년 ${monthOnly(ym)}`;
@@ -2545,12 +2560,13 @@ function drawSales() {
     const list = filteredSales();
     const total = saleTotals(list);
     const years = descYears([...SALES.map((s) => s.date.slice(0, 4)), saleView.year]);
+    const bySender = saleView.sort === "sender";
     const row = (s) => `<div class="py-3 border-b border-slate-100 last:border-0">
         <div class="flex items-start justify-between gap-3">
             <div class="min-w-0">
                 <p class="text-sm"><span class="text-xs text-slate-400 tabular-nums mr-1">${mmdd(s.date)}</span><b class="text-slate-800">${esc(s.receiverName)}</b> ${telLink(s.receiverPhone)}</p>
                 <p class="text-sm text-slate-600 break-words">${esc(s.address)}</p>
-                <p class="text-xs text-slate-500">${s.senderName || s.senderPhone ? `보낸 사람 ${esc(s.senderName)} ${telLink(s.senderPhone)}` : ""}${s.memo ? ` · ${esc(s.memo)}` : ""}</p>
+                <p class="text-xs text-slate-500">${[!bySender && (s.senderName || s.senderPhone) && `보낸 사람 ${esc(s.senderName)} ${telLink(s.senderPhone)}`, s.memo && esc(s.memo)].filter(Boolean).join(" · ")}</p>
             </div>
             <div class="text-right shrink-0">
                 <p class="font-bold tabular-nums text-slate-800">${s.amount ? won(s.amount) : "-"}</p>
@@ -2560,16 +2576,21 @@ function drawSales() {
         </div>
         <div class="mt-1">${rowButtons("Sale", s.id)}</div>
     </div>`;
-    const monthCard = ([month, items]) => {
-        const t = saleTotals(items);
-        return card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
+    const senderBox = ([name, items]) => `<div class="mt-3 rounded-xl border border-indigo-200 overflow-hidden">
+        <div class="flex flex-wrap items-baseline justify-between gap-x-3 px-3 py-2 bg-indigo-50">
+            <p class="text-sm"><span class="text-xs text-indigo-500 mr-1">보낸 사람</span><b class="text-indigo-800">${esc(name || "없음")}</b> ${senderPhones(items)}</p>
+            <span class="text-xs text-slate-500">${saleSummary(items)}</span>
+        </div>
+        <div class="px-3">${items.map(row).join("")}</div>
+    </div>`;
+    const monthCard = ([month, items]) =>
+        card(`<div class="flex flex-wrap items-baseline justify-between gap-2 mb-1">
             <h3 class="font-bold text-slate-700">${monthLabel(month)}</h3>
             <div class="flex items-baseline gap-3">
-                <span class="text-xs text-slate-500">${items.length}건 · ${t.qty}박스 · ${won(t.amount)}${t.unpaidCount ? ` · <span class="text-red-500">미입금 ${t.unpaidCount}건</span>` : ""}</span>
+                <span class="text-xs text-slate-500">${saleSummary(items)}</span>
                 ${textButton("📥 엑셀", `exportSales('${month}')`, "text-emerald-700")}
             </div>
-        </div>${items.map(row).join("")}`);
-    };
+        </div>${(bySender ? groupBySender(items).map(senderBox) : items.map(row)).join("")}`);
     el.innerHTML =
         header +
         `<div class="grid gap-4">
