@@ -18,7 +18,7 @@ const defaultData = () => ({ banks: [], accounts: [], cards: [], fixedExpenses: 
 const COLLECTIONS = ["banks", "accounts", "cards", "fixedExpenses", "trips"];
 const LISTS = { addresses: ["name"], sales: ["date", "receiverName", "address"], products: ["year", "name"] };
 const FIELDS = {
-    banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
+    banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "fundTarget", "retainAmount", "fixedTransfers"],
     accounts: ["owner", "relation", "bank", "memo"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
@@ -354,7 +354,7 @@ const normalize = (collection, body) => {
     if (collection === "banks") {
         if (data.accountLast4 != null) data.accountLast4 = tail4(data.accountLast4);
         if ("relayExclude" in data) data.relayExclude = !!data.relayExclude;
-        if ("relayTarget" in data) data.relayTarget = String(data.relayTarget || "");
+        for (const k of ["relayTarget", "fundTarget"]) if (k in data) data[k] = String(data[k] || "");
         if ("retainAmount" in data) data.retainAmount = Number(data.retainAmount) || 0;
         if ("fixedTransfers" in data)
             data.fixedTransfers = (Array.isArray(data.fixedTransfers) ? data.fixedTransfers : [])

@@ -336,9 +336,15 @@ async function copySecret(k) {
 
 const relayChain = () => DB.banks.filter((b) => !b.relayExclude);
 
+const fundSource = () => {
+    const chain = relayChain();
+    return DB.banks.find((b) => b.relayExclude && chain.some((x) => x.id === b.fundTarget));
+};
+
 const relayBadges = (b) => {
     const tag = (text, cls) => `<span class="inline-block text-xs px-2 py-0.5 rounded ${cls}">${text}</span>`;
-    if (b.relayExclude) return tag("🚫 릴레이 제외", "bg-slate-100 text-slate-500");
+    if (b.relayExclude)
+        return tag("🚫 릴레이 제외", "bg-slate-100 text-slate-500") + (fundSource() === b ? ` ${tag(`💰 부족분 충당 → ${bankName(b.fundTarget)}`, "bg-sky-50 text-sky-700")}` : "");
     const chain = relayChain();
     const next = chain[chain.findIndex((x) => x.id === b.id) + 1];
     const target =
@@ -485,6 +491,7 @@ async function relaySettings(id) {
     ]
         .map((o) => `<option value="${o.value}" ${o.value === (b.relayTarget || "") ? "selected" : ""}>${o.label}</option>`)
         .join("");
+    const fundOpts = optionTags([{ value: "", label: "사용 안 함" }, ...relayChain().filter((x) => x.id !== id).map((x) => ({ value: x.id, label: x.name }))], b.fundTarget || "");
     const { value: v } = await Swal.fire({
         title: `${b.name} 이체 설정`,
         html: `<div class="text-left text-sm">
@@ -498,6 +505,8 @@ async function relaySettings(id) {
                 <button type="button" onclick="addFixedRow('${b.id}')" class="text-indigo-600 text-xs hover:underline">+ 추가</button>
             </div>
             <div id="ftList">${(b.fixedTransfers || []).map((t) => fixedRowHtml(b.id, t)).join("")}</div>
+            <label class="block font-medium text-slate-600 mt-4 mb-1">부족분 충당 <span class="text-xs font-normal text-slate-400">(이체 플랜에 모자란 돈을 이 통장에서 보낼 은행 · 릴레이에서 제외한 통장 하나만 적용)</span></label>
+            <select id="r_fund" class="swal2-input !m-0 !w-full !flex">${fundOpts}</select>
         </div>`,
         showCancelButton: true,
         confirmButtonText: "저장",
@@ -517,12 +526,14 @@ async function relaySettings(id) {
             relayExclude: document.getElementById("r_exclude").checked,
             relayTarget: document.getElementById("r_target").value,
             retainAmount: toNum(document.getElementById("r_retain").value),
+            fundTarget: document.getElementById("r_fund").value,
             fixedTransfers: [...document.querySelectorAll("#ftList .ftRow")]
                 .map((r) => ({ bankId: r.querySelector(".ftBank").value, amount: toNum(r.querySelector(".ftAmount").value) }))
                 .filter((t) => t.bankId && t.amount > 0),
         }),
     });
     if (!v) return;
+    if (v.fundTarget) await Promise.all(DB.banks.filter((x) => x.id !== id && x.fundTarget).map((x) => api("PUT", `/api/banks/${x.id}`, { fundTarget: "" })));
     await api("PUT", `/api/banks/${id}`, v);
     await reload();
     toast("success", "이체 설정이 저장되었습니다");
@@ -1448,7 +1459,8 @@ function moveMonthly(dir) {
 }
 
 const isCurrentCycle = () => selectedMonth === currentAnchor(cycleDay());
-const isLiveCycle = () => isCurrentCycle() && !Object.keys(window._transfersDone || {}).length;
+const isOpenCycle = () => selectedMonth >= currentAnchor(cycleDay());
+const isLiveCycle = () => isOpenCycle() && !Object.keys(window._transfersDone || {}).length;
 
 const stampNow = (d = new Date()) => `${d.getFullYear()}-${pad0(d.getMonth() + 1)}-${pad0(d.getDate())} ${pad0(d.getHours())}:${pad0(d.getMinutes())}`;
 
@@ -1456,20 +1468,32 @@ const today = () => stampNow().slice(0, 10);
 
 const mmdd = (d) => d.slice(5).replace("-", ".");
 
-const balanceBadge = (auto, manualAt) =>
-    auto
-        ? `<span class="text-xs text-sky-500" title="수집 잔액 (${auto.at})">${balanceSourceTag(auto)}</span>`
-        : manualAt
-          ? `<span class="text-xs text-amber-600" title="직접 입력 (${manualAt})">✏️ 직접 입력</span>`
-          : "";
+const balanceBadge = (id, auto, manualAt) => {
+    if (auto) return `<span class="text-xs text-sky-500" title="수집 잔액 (${auto.at})">${balanceSourceTag(auto)}</span>`;
+    if (!manualAt) return "";
+    const collected = isLiveCycle() && DB.currentBalances?.[id];
+    const revert = collected ? ` <button type="button" onclick="useCollectedBalance('${id}')" class="underline" title="수집 잔액 ${balanceText(collected)}으로 되돌리기">↺ 수집값</button>` : "";
+    return `<span class="text-xs text-amber-600" title="직접 입력 (${manualAt})">✏️ 직접 입력${revert}</span>`;
+};
+
+const setBalanceBadge = (id, auto) => {
+    document.querySelector(`[data-balance-badge="${id}"]`).innerHTML = balanceBadge(id, auto, window._balancesManual[id]);
+    renderSummary();
+};
 
 function editMonthlyBalance(input) {
     formatMoneyInput(input);
     const id = input.dataset.balance;
     if (input.value === "") delete window._balancesManual[id];
     else window._balancesManual[id] = stampNow();
-    document.querySelector(`[data-balance-badge="${id}"]`).innerHTML = balanceBadge(null, window._balancesManual[id]);
-    renderSummary();
+    setBalanceBadge(id);
+}
+
+function useCollectedBalance(id) {
+    const collected = DB.currentBalances[id];
+    delete window._balancesManual[id];
+    document.querySelector(`[data-balance="${id}"]`).value = comma(collected.amount);
+    setBalanceBadge(id, collected);
 }
 
 async function renderMonthly() {
@@ -1492,7 +1516,7 @@ async function renderMonthly() {
                   const manualAt = window._balancesManual[b.id];
                   const keepSaved = saved != null && (!live || !collected || manualAt >= collected.at);
                   return `<div class="flex items-center justify-between gap-3 py-2">
-            <span class="text-slate-700">🏦 ${b.name} <span data-balance-badge="${b.id}">${balanceBadge(keepSaved ? null : collected, live && manualAt)}</span></span>
+            <span class="text-slate-700">🏦 ${b.name} <span data-balance-badge="${b.id}">${balanceBadge(b.id, keepSaved ? null : collected, live && manualAt)}</span></span>
             <input data-balance="${b.id}" value="${comma(keepSaved ? saved : (collected?.amount ?? ""))}" type="text" inputmode="numeric" placeholder="잔액" oninput="editMonthlyBalance(this)"
                 class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
         </div>`;
@@ -1671,24 +1695,31 @@ function renderSummary() {
     );
     const expenseByBank = sumByBank(window._monthlyExpenses, (e) => e.bankId, (e) => toNum(e.amount));
 
-    const plan = computeRelayPlan(balanceOf, paymentByBank, expenseByBank);
+    const done = window._transfersDone || {};
+    const open = isOpenCycle();
+    const source = fundSource();
+    const fundStep = source && { key: `${source.id}>${source.fundTarget}:s`, fromId: source.id, toId: source.fundTarget };
+    const planWith = (amount, bal = balanceOf) => computeRelayPlan(bal, paymentByBank, expenseByBank, fundStep && amount > 0 ? { ...fundStep, amount } : null);
+    const shortOf = (p) => p.shortfalls.reduce((s, x) => s + x.amount, 0);
+    const base = planWith(0);
+    const need = shortOf(base);
+    const fundAmount = fundStep && need && (open || done[fundStep.key]) ? need - shortOf(planWith(need)) : 0;
+    const plan = fundAmount > 0 ? planWith(fundAmount) : base;
     const { shortfalls } = plan;
-    const shortTotal = shortfalls.reduce((s, x) => s + x.amount, 0);
-    const depositBank = shortfalls.find(
-        ({ bank }) => !computeRelayPlan((id) => balanceOf(id) + (id === bank.id ? shortTotal : 0), paymentByBank, expenseByBank).shortfalls.length
-    )?.bank;
+    const shortTotal = shortOf(plan);
+    const depositBank = shortfalls.find(({ bank }) => {
+        const deposited = (id) => balanceOf(id) + (id === bank.id ? shortTotal : 0);
+        return !planWith(fundAmount, deposited).shortfalls.length;
+    })?.bank;
     const shortAmount = `<b class="text-base text-red-600 tabular-nums">${won(shortTotal)}</b>`;
-    const depositNotice = shortTotal
+    const depositNotice = open && shortTotal
         ? `<div class="mb-3 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
             💰 <b>입금 필요</b> — ${depositBank ? `${depositBank.name}에 ${shortAmount}을 입금하면 이체 플랜대로 맞아떨어집니다.` : `합계 ${shortAmount}을 은행별로 나누어 입금해야 합니다.`}
             ${shortfalls.length > 1 ? `<span class="block text-xs text-amber-700 mt-0.5">은행별 부족분(남길 금액 포함): ${shortfalls.map((s) => `${s.bank.name} ${won(s.amount)}`).join(" · ")}</span>` : ""}
         </div>`
         : "";
-    const done = window._transfersDone || {};
     const modeEl = document.getElementById("balanceMode");
-    if (modeEl)
-        modeEl.textContent =
-            !isCurrentCycle() ? "" : isLiveCycle() ?"(수집 잔액 자동 반영 · 이체 플랜 첫 체크 시 고정)" : "(🔒 이체 시작 시점 잔액으로 고정)";
+    if (modeEl) modeEl.textContent = !open ? "" : isLiveCycle() ? "(수집 잔액 자동 반영 · 이체 플랜 첫 체크 시 고정)" : "(🔒 이체 시작 시점 잔액으로 고정)";
 
     const remainClass = (v) => (v >= 0 ? "text-green-600" : "text-red-600");
     const num = (v, cls = "text-slate-700") => `<td class="text-right py-2 px-2 tabular-nums ${cls}">${won(v)}</td>`;
@@ -1730,6 +1761,7 @@ function renderSummary() {
             const title = isExp
                 ? `${bankName(t.fromId)} <span class="text-slate-400">→</span> ${t.name} ${tag("지출", "bg-orange-50 text-orange-600")}`
                 : `${bankName(t.fromId)} <span class="text-slate-400">→</span> ${bankName(t.toId)}
+                    ${t.fund ? tag("충당", "bg-sky-50 text-sky-700") : ""}
                     ${t.fixed ? tag("고정", "bg-amber-50 text-amber-700") : ""}
                     ${t.back ? tag("반환", "bg-emerald-50 text-emerald-700") : ""}
                     ${t.short ? tag("⚠ 잔액 부족 주의", "bg-red-50 text-red-600") : ""}`;
@@ -1796,9 +1828,13 @@ function renderSummary() {
         : "";
 }
 
-function computeRelayPlan(balanceOf, paymentByBank, expenseByBank) {
+function computeRelayPlan(balanceOf, paymentByBank, expenseByBank, fund) {
     const chain = relayChain();
     const inflow = {}, outflow = {}, items = [];
+    if (fund) {
+        items.push({ kind: "transfer", ...fund, fund: true });
+        inflow[fund.toId] = outflow[fund.fromId] = fund.amount;
+    }
     chain.forEach((b, i) => {
         (window._monthlyExpenses || []).forEach((e, idx) => {
             if (e.bankId === b.id && toNum(e.amount)) items.push({ kind: "expense", key: `x:${idx}:${b.id}`, fromId: b.id, name: e.name, amount: toNum(e.amount) });
@@ -1848,6 +1884,7 @@ const monthlyPayload = () => {
             from: bankName(t.fromId),
             to: t.kind === "expense" ? t.name : bankName(t.toId),
             amount: t.amount,
+            fund: !!t.fund,
             fixed: !!t.fixed,
             back: !!t.back,
         })),
@@ -3124,7 +3161,7 @@ async function renderHistory() {
                 <div class="mt-1">
                 ${r.plan
                     .map(
-                        (x) => `<p class="text-xs text-slate-600 py-0.5">${r.transfersDone?.[x.key] ? "✅" : "⬜"} ${x.from} → ${x.to} <b class="tabular-nums">${won(x.amount)}</b>${x.fixed ? ' <span class="text-amber-600">고정</span>' : ""}${x.back ? ' <span class="text-emerald-600">반환</span>' : ""}${x.kind === "expense" ? ' <span class="text-orange-500">지출</span>' : ""}</p>`
+                        (x) => `<p class="text-xs text-slate-600 py-0.5">${r.transfersDone?.[x.key] ? "✅" : "⬜"} ${x.from} → ${x.to} <b class="tabular-nums">${won(x.amount)}</b>${x.fund ? ' <span class="text-sky-600">충당</span>' : ""}${x.fixed ? ' <span class="text-amber-600">고정</span>' : ""}${x.back ? ' <span class="text-emerald-600">반환</span>' : ""}${x.kind === "expense" ? ' <span class="text-orange-500">지출</span>' : ""}</p>`
                     )
                     .join("")}
                 </div>
