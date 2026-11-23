@@ -1503,12 +1503,13 @@ async function renderMonthly() {
                 <input data-payment="${c.id}" data-prev="${prev ?? ""}" data-upcoming="${upRel?.amount ?? ""}" value="${comma(curVal)}" type="text" inputmode="numeric" placeholder="결제 금액" oninput="formatMoneyInput(this); updateDiff('${c.id}')"
                     class="border border-slate-300 rounded-lg px-3 py-1.5 w-40 text-right" />
             </div>
-            <p data-diff="${c.id}" class="text-xs text-right mt-1 text-slate-400">${diffText(curVal, prev)}</p>
+            <p data-diff="${c.id}" class="text-xs text-right mt-1">${diffText(curVal, prev)}</p>
             <p data-updiff="${c.id}" class="text-xs text-right mt-0.5">${upDiffText(curVal, upRel?.amount)}</p>
         </div>`;
               })
               .join("")
         : emptyState("등록된 카드가 없습니다.");
+    const paymentTotal = DB.cards.length ? `<div id="paymentTotal" class="pt-3 mt-1 border-t-2 border-slate-200"></div>` : "";
 
     const mPeriod = cyclePeriod(selectedMonth, cycleDay());
     monthlyEl.innerHTML = `
@@ -1523,7 +1524,7 @@ async function renderMonthly() {
         </div>
         <div class="grid gap-4 lg:grid-cols-2">
             ${card(`<h3 class="font-bold text-slate-700 mb-2">① 은행 잔액 <span id="balanceMode" class="text-xs font-normal text-slate-400"></span></h3>${balanceRows}`)}
-            ${card(`<h3 class="font-bold text-slate-700 mb-2">② 카드 결제 금액 <span class="text-xs font-normal text-slate-400">(전월 대비 비교)</span></h3>${paymentRows}`)}
+            ${card(`<h3 class="font-bold text-slate-700 mb-2">② 카드 결제 금액 <span class="text-xs font-normal text-slate-400">(전월 대비 비교)</span></h3><div>${paymentRows}</div>${paymentTotal}`)}
         </div>
         <div class="mt-4">
             ${card(`
@@ -1542,6 +1543,23 @@ async function renderMonthly() {
     renderSummary();
 }
 
+const sumFilled = (vals) => {
+    const filled = vals.filter((v) => v !== "");
+    return filled.length ? filled.reduce((s, v) => s + toNum(v), 0) : "";
+};
+
+function renderPaymentTotal() {
+    const el = document.getElementById("paymentTotal");
+    if (!el) return;
+    const inputs = [...document.querySelectorAll("[data-payment]")];
+    const cur = sumFilled(inputs.map((i) => i.value));
+    el.innerHTML = `<div class="flex items-center justify-between gap-3">
+            <span class="font-bold text-slate-700">이번달 카드 결제 합계</span>
+            <span class="text-lg font-bold text-red-500 tabular-nums">${won(cur)}</span>
+        </div>
+        <p class="text-xs text-right mt-1">${diffText(cur, sumFilled(inputs.map((i) => i.dataset.prev)))}</p>`;
+}
+
 const upDiffText = (cur, upAmount) => {
     if (upAmount == null || upAmount === "" || cur === "" || cur == null) return "";
     const d = toNum(cur) - Number(upAmount);
@@ -1550,21 +1568,18 @@ const upDiffText = (cur, upAmount) => {
 };
 
 const diffText = (cur, prev) => {
-    if (prev === undefined || prev === null || prev === "") return "전월 기록 없음";
-    if (cur === "" || cur === undefined) return `전월 ${won(prev)}`;
+    const gray = (text) => `<span class="text-slate-400">${text}</span>`;
+    if (prev == null || prev === "") return gray("전월 기록 없음");
+    if (cur === "" || cur == null) return gray(`전월 ${won(prev)}`);
     const d = toNum(cur) - Number(prev);
-    if (d === 0) return `전월과 동일 (${won(prev)})`;
-    return d > 0 ? `▲ 전월 대비 ${won(d)} 더 지출` : `▼ 전월 대비 ${won(-d)} 절약`;
+    if (d === 0) return gray(`전월과 동일 (${won(prev)})`);
+    return d > 0 ? `<span class="text-red-500">▲ 전월 대비 ${won(d)} 더 지출</span>` : `<span class="text-green-600">▼ 전월 대비 ${won(-d)} 절약</span>`;
 };
 
 function updateDiff(cardId) {
     const input = document.querySelector(`[data-payment="${cardId}"]`);
-    const prevRaw = input.dataset.prev;
-    const prev = prevRaw === "" ? null : Number(prevRaw);
-    const el = document.querySelector(`[data-diff="${cardId}"]`);
     const cur = input.value;
-    el.textContent = diffText(cur, prev);
-    el.className = "text-xs text-right mt-1 " + (cur === "" || prev === null ? "text-slate-400" : toNum(cur) - prev > 0 ? "text-red-500" : toNum(cur) - prev < 0 ? "text-green-600" : "text-slate-400");
+    document.querySelector(`[data-diff="${cardId}"]`).innerHTML = diffText(cur, input.dataset.prev);
     const upEl = document.querySelector(`[data-updiff="${cardId}"]`);
     if (upEl) upEl.innerHTML = upDiffText(cur, input.dataset.upcoming || null);
     renderSummary();
@@ -1630,6 +1645,7 @@ async function addMonthlyExpense() {
 }
 
 function renderSummary() {
+    renderPaymentTotal();
     const balanceOf = (id) => toNum(document.querySelector(`[data-balance="${id}"]`)?.value);
     const sumByBank = (entries, idKey, amountFn) =>
         entries.reduce((acc, e) => {
