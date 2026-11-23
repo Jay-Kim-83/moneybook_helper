@@ -1576,6 +1576,7 @@ async function renderMonthly() {
 
     renderMonthlyExpenses();
     renderSummary();
+    if (live) await restoreArrivedFund();
 }
 
 const sumFilled = (vals) => {
@@ -1904,8 +1905,8 @@ function toggleTransferDone(key, checked) {
     const ctx = window._planCtx;
     const item = ctx?.items.find((t) => t.key === key);
     const at = stampNow().slice(5);
+    const snap = checked ? { at } : window._transfersDone[key];
     if (checked) {
-        const snap = { at };
         window._transfersDone[key] = snap;
         if (item && ctx) {
             snap.fromBal = ctx.holdingOf(item.fromId);
@@ -1922,6 +1923,42 @@ function toggleTransferDone(key, checked) {
     }
     renderSummary();
     scheduleAutosave();
+    if (item?.fund) syncFundBalance(item, checked, snap);
+}
+
+async function syncFundBalance(item, checked, snap) {
+    try {
+        const r = checked
+            ? await api("POST", "/api/transactions", { kind: "출금", amount: item.amount, at: stampNow(), bankId: item.fromId, title: `부족분 충당 → ${bankName(item.toId)}` })
+            : snap?.txId && (await api("DELETE", `/api/transactions/${snap.txId}`));
+        if (!r) return;
+        DB.currentBalances = r.currentBalances;
+        if (!checked) return;
+        snap.txId = r.transaction.id;
+        scheduleAutosave();
+    } catch (e) {
+        toast("error", e.message);
+    }
+}
+
+async function restoreArrivedFund() {
+    const targetId = fundSource()?.fundTarget;
+    const collected = DB.currentBalances?.[targetId];
+    const input = document.querySelector(`[data-balance="${targetId}"]`);
+    if (!collected || !input || window._balancesManual[targetId]) return;
+    const from = stampNow(new Date(Date.now() - 7 * 864e5)).slice(0, 10);
+    const txs = await api("GET", `/api/transactions?from=${from}&to=${today()}`).catch(() => []);
+    const last = txs.filter((t) => t.bankId === targetId && t.status === "ok").reduce((a, t) => (!a || t.at > a.at ? t : a), null);
+    if (!last?.inflow) return;
+    input.value = comma(collected.amount - last.amount);
+    renderSummary();
+    const step = window._planCtx.items[0];
+    if (step?.fund && step.amount === last.amount) {
+        document.querySelector(`[data-balance-badge="${targetId}"]`).innerHTML = `<span class="text-xs text-sky-500" title="${last.at} 입금 ${won(last.amount)}을 충당 단계로 보고 뺀 잔액">📥 충당 입금 전</span>`;
+        return;
+    }
+    input.value = comma(collected.amount);
+    renderSummary();
 }
 
 async function clearTransferLog() {
