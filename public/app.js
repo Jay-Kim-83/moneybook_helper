@@ -783,10 +783,14 @@ function currentAnchor(day, now = new Date()) {
     return `${y}-${pad0(m)}`;
 }
 
-function moveLedger(dir) {
-    const [y, m] = ledgerMonth.split("-").map(Number);
+const shiftMonth = (ym, dir) => {
+    const [y, m] = ym.split("-").map(Number);
     const d = new Date(y, m - 1 + dir, 1);
-    ledgerMonth = `${d.getFullYear()}-${pad0(d.getMonth() + 1)}`;
+    return `${d.getFullYear()}-${pad0(d.getMonth() + 1)}`;
+};
+
+function moveLedger(dir) {
+    ledgerMonth = shiftMonth(ledgerMonth, dir);
     renderLedger();
 }
 
@@ -1420,19 +1424,26 @@ async function importStatement() {
     toast("success", `${result.rows.filter((r) => !r.match).length}건을 가져왔습니다`, balanceNote({ bankId }, result.balanceResult));
 }
 
-const prevMonth = (ym) => {
-    const [y, m] = ym.split("-").map(Number);
-    const d = new Date(y, m - 2, 1);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-};
-
 const monthlyEl = document.getElementById("tab-monthly");
-let selectedMonth = null;
+const MONTH_KEY = "monthlyPeriod";
+let selectedMonth = (() => {
+    try {
+        return sessionStorage.getItem(MONTH_KEY);
+    } catch {
+        return null;
+    }
+})();
+
+function selectMonth(month) {
+    selectedMonth = month;
+    try {
+        if (isCurrentCycle()) sessionStorage.removeItem(MONTH_KEY);
+        else sessionStorage.setItem(MONTH_KEY, month);
+    } catch {}
+}
 
 function moveMonthly(dir) {
-    const [y, m] = selectedMonth.split("-").map(Number);
-    const d = new Date(y, m - 1 + dir, 1);
-    selectedMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    selectMonth(shiftMonth(selectedMonth, dir));
     renderMonthly();
 }
 
@@ -1463,7 +1474,7 @@ function editMonthlyBalance(input) {
 
 async function renderMonthly() {
     if (!selectedMonth) selectedMonth = currentAnchor(cycleDay());
-    const [record, previous] = await Promise.all([api("GET", `/api/monthly/${selectedMonth}`), api("GET", `/api/monthly/${prevMonth(selectedMonth)}`)]);
+    const [record, previous] = await Promise.all([api("GET", `/api/monthly/${selectedMonth}`), api("GET", `/api/monthly/${shiftMonth(selectedMonth, -1)}`)]);
     const current = record || { month: selectedMonth, balances: {}, payments: {}, expenses: [] };
     window._monthlyExpenses = current.expenses?.length
         ? current.expenses
@@ -3126,7 +3137,7 @@ async function renderHistory() {
 }
 
 function viewMonth(month) {
-    selectedMonth = month;
+    selectMonth(month);
     showTab("monthly");
 }
 
