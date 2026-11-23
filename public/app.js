@@ -278,7 +278,10 @@ async function secretOpen(type, id) {
         denyButtonColor: "#64748b",
     });
     if (isDenied) return secretEdit(type, id);
-    if (!isConfirmed) return;
+    if (isConfirmed) await revealSecret(id, `🔒 ${name}`);
+}
+
+async function revealSecret(id, title) {
     try {
         const r = await api("POST", `/api/secrets/${id}/reveal`);
         window._secretVals = r.fields;
@@ -293,7 +296,7 @@ async function secretOpen(type, id) {
             )
             .join("");
         await Swal.fire({
-            title: `🔒 ${name}`,
+            title,
             html: `<div class="text-left">${rows}<p class="text-xs text-slate-400 mt-3">창을 닫으면 화면에서 사라집니다.</p></div>`,
             confirmButtonText: "닫기",
             confirmButtonColor: "#4f46e5",
@@ -304,16 +307,13 @@ async function secretOpen(type, id) {
     }
 }
 
+const readSecret = (id) => (DB.secrets?.[id]?.has ? api("POST", `/api/secrets/${id}/reveal`).catch(() => null) : null);
+
 async function secretEdit(type, id) {
     const name = secretName(type, id);
     const meta = DB.secrets?.[id];
-    let values = { hint: meta?.hint || "" };
-    if (meta?.has) {
-        try {
-            const r = await api("POST", `/api/secrets/${id}/reveal`);
-            values = { ...r.fields, hint: r.hint };
-        } catch {}
-    }
+    const r = await readSecret(id);
+    const values = r ? { ...r.fields, hint: r.hint } : { hint: meta?.hint || "" };
     const v = await formModal({ title: `🔒 ${name} 보안 정보 ${meta?.has ? "수정" : "등록"}`, fields: SECRET_FIELDS[type], values });
     if (!v) return;
     await api("PUT", `/api/secrets/${id}`, v);
@@ -385,7 +385,55 @@ function renderBanks() {
     document.getElementById("tab-banks").innerHTML =
         sectionHeader("나의 은행", "+ 은행 추가", "saveBank()", DB.banks.length ? "resetBanks()" : "") +
         `<p class="text-xs text-slate-400 -mt-2 mb-3">카드를 드래그하거나 ▲▼로 순서를 바꾸면 이체 릴레이·이번달 결제 순서가 함께 바뀝니다.</p>
-        <div class="grid gap-3 md:grid-cols-2">${list}</div>`;
+        <div class="grid gap-3 md:grid-cols-2">${list}</div>
+        <div class="mt-10">${accountsSection()}</div>`;
+}
+
+const findAccount = (id) => DB.accounts.find((a) => a.id === id);
+
+const accountCard = (a) =>
+    card(`<div class="flex items-start justify-between gap-3">
+        <div class="min-w-0">
+            <p class="font-bold text-slate-800">${esc(a.owner)}${a.relation ? ` <span class="text-sm font-normal text-slate-400">(${esc(a.relation)})</span>` : ""}</p>
+            <p class="text-sm text-slate-500 mt-1">${esc(a.bank)} ${last4(a.accountLast4)}</p>
+            ${a.memo ? `<p class="text-xs text-slate-500 mt-1 break-words">📝 ${esc(a.memo)}</p>` : ""}
+        </div>
+        ${rowButtons("Account", a.id, ["show", "edit", "delete"])}
+    </div>`);
+
+const accountsSection = () =>
+    sectionHeader("가족 계좌", "+ 계좌 추가", "addAccount()") +
+    `<p class="text-xs text-slate-400 -mt-2 mb-3">계좌번호는 암호화해 저장합니다. 잔액·이체 릴레이·문자 거래 수집에는 쓰이지 않습니다.</p>` +
+    (DB.accounts.length ? `<div class="grid gap-3 md:grid-cols-2">${DB.accounts.map(accountCard).join("")}</div>` : emptyState("등록된 가족 계좌가 없습니다."));
+
+const ACCOUNT_FIELDS = [
+    { name: "owner", label: "예금주", required: true },
+    { name: "relation", label: "관계 (예: 어머니)" },
+    { name: "bank", label: "은행", required: true },
+    { name: "accountNo", label: "계좌번호", required: true },
+    { name: "memo", label: "메모" },
+];
+
+const showAccount = (id) => {
+    const { owner, bank } = findAccount(id);
+    return revealSecret(id, `${esc(owner)} · ${esc(bank)}`);
+};
+
+async function editAccount(id) {
+    const v = await formModal({ title: id ? "가족 계좌 수정" : "가족 계좌 추가", fields: ACCOUNT_FIELDS, values: { ...findAccount(id), ...(await readSecret(id))?.fields } });
+    if (!v) return;
+    await saveList("accounts", id, v);
+    await reload();
+    toast("success", id ? "가족 계좌가 수정되었습니다" : "가족 계좌가 추가되었습니다");
+}
+
+const addAccount = () => editAccount(null);
+
+async function deleteAccount(id) {
+    if (!(await confirmDelete(`${findAccount(id).owner}님 계좌와 암호화된 계좌번호가 삭제됩니다.`))) return;
+    await api("DELETE", `/api/accounts/${id}`);
+    await reload();
+    toast("success", "가족 계좌가 삭제되었습니다");
 }
 
 let dragBankId = null;
@@ -2281,9 +2329,9 @@ const visibleAddresses = () => {
     return CONTACTS.filter((a) => !q || searchKey(ADDRESS_FIELDS.map((f) => a[f.name]).join("")).includes(q)).sort(ADDRESS_SORTS[addressSort][1]);
 };
 
-const ROW_ACTIONS = { copy: ["복사", "text-slate-600"], edit: ["수정", "text-indigo-600"], delete: ["삭제", "text-red-600"] };
+const ROW_ACTIONS = { show: ["🔒 보기", "text-amber-600"], copy: ["복사", "text-slate-600"], edit: ["수정", "text-indigo-600"], delete: ["삭제", "text-red-600"] };
 
-const rowButtons = (kind, id, actions = Object.keys(ROW_ACTIONS)) =>
+const rowButtons = (kind, id, actions = ["copy", "edit", "delete"]) =>
     `<div class="flex gap-3 shrink-0">${actions.map((a) => textButton(ROW_ACTIONS[a][0], `${a}${kind}('${id}')`, ROW_ACTIONS[a][1])).join("")}</div>`;
 
 async function saveList(collection, id, body) {

@@ -14,11 +14,12 @@ const TRANSACTIONS_PATH = path.join(DATA_DIR, "transactions.json");
 const MONTHLY_DIR = path.join(DATA_DIR, "monthly");
 const SECRET_PATH = path.join(DATA_DIR, ".session_secret");
 const DATABASE_URL = process.env.DATABASE_URL || "";
-const defaultData = () => ({ banks: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
-const COLLECTIONS = ["banks", "cards", "fixedExpenses", "trips"];
+const defaultData = () => ({ banks: [], accounts: [], cards: [], fixedExpenses: [], trips: [], currentBalances: {}, cardStats: {}, settings: {}, secrets: {} });
+const COLLECTIONS = ["banks", "accounts", "cards", "fixedExpenses", "trips"];
 const LISTS = { addresses: ["name"], sales: ["date", "receiverName", "address"], products: ["year", "name"] };
 const FIELDS = {
     banks: ["name", "alias", "accountLast4", "relayExclude", "relayTarget", "retainAmount", "fixedTransfers"],
+    accounts: ["owner", "relation", "bank", "memo"],
     cards: ["company", "alias", "cardLast4", "bankId", "payDay"],
     fixedExpenses: ["name", "amount", "bankId", "description"],
     trips: ["name", "start", "end", "splitMode", "closed", "members", "items"],
@@ -255,6 +256,14 @@ const decryptText = (blob) => {
     d.setAuthTag(tag);
     return Buffer.concat([d.update(ct), d.final()]).toString("utf8");
 };
+const tail4 = (v) => String(v).replace(/\D/g, "").slice(-4);
+const LAST4_OF = { accountNo: "accountLast4", cardNo: "cardLast4" };
+const SECRET_OF = { accounts: "accountNo" };
+const storeSecret = (db, id, fields, hint = "") => {
+    db.secrets[id] = { data: encryptText(JSON.stringify(fields)), hint: String(hint) };
+    const owner = COLLECTIONS.flatMap((c) => db[c]).find((x) => x.id === id);
+    for (const [k, last4] of Object.entries(LAST4_OF)) if (owner && fields[k]) owner[last4] = tail4(fields[k]);
+};
 
 const APPLEBOOK_URL = (process.env.APPLEBOOK_URL || "https://apple.deulechon-love.workers.dev").replace(/\/+$/, "");
 const APPLEBOOK_SYNC_KEY = (process.env.APPLEBOOK_SYNC_KEY || "").trim();
@@ -343,7 +352,7 @@ const LIST_TEXT = {
 const normalize = (collection, body) => {
     const data = FIELDS[collection].reduce((o, k) => (k in body ? { ...o, [k]: body[k] } : o), {});
     if (collection === "banks") {
-        if (data.accountLast4 != null) data.accountLast4 = String(data.accountLast4).replace(/\D/g, "").slice(-4);
+        if (data.accountLast4 != null) data.accountLast4 = tail4(data.accountLast4);
         if ("relayExclude" in data) data.relayExclude = !!data.relayExclude;
         if ("relayTarget" in data) data.relayTarget = String(data.relayTarget || "");
         if ("retainAmount" in data) data.retainAmount = Number(data.retainAmount) || 0;
@@ -353,7 +362,7 @@ const normalize = (collection, body) => {
                 .filter((t) => t.bankId && t.amount > 0);
     }
     if (collection === "cards") {
-        if (data.cardLast4 != null) data.cardLast4 = String(data.cardLast4).replace(/\D/g, "").slice(-4);
+        if (data.cardLast4 != null) data.cardLast4 = tail4(data.cardLast4);
         if ("payDay" in data) {
             const d = Number(data.payDay) || 0;
             data.payDay = d >= 1 && d <= 31 ? d : null;
@@ -804,11 +813,7 @@ const handleApi = async (req, res, parts) => {
             const body = await readBody(req);
             const { hint = "", ...fields } = body;
             db.secrets = db.secrets || {};
-            db.secrets[id] = { data: encryptText(JSON.stringify(fields)), hint: String(hint) };
-            const bank = db.banks.find((b) => b.id === id);
-            const cardObj = db.cards.find((c) => c.id === id);
-            if (bank && fields.accountNo) bank.accountLast4 = String(fields.accountNo).replace(/\D/g, "").slice(-4);
-            if (cardObj && fields.cardNo) cardObj.cardLast4 = String(fields.cardNo).replace(/\D/g, "").slice(-4);
+            storeSecret(db, id, fields, hint);
             await store.writeDB(db);
             return send(res, 200, { ok: true });
         }
@@ -988,25 +993,27 @@ const handleApi = async (req, res, parts) => {
 
     if (COLLECTIONS.includes(collection)) {
         const db = await store.readDB();
-        if (method === "POST") {
-            const item = { id: genId(), ...normalize(collection, await readBody(req)) };
-            db[collection].push(item);
+        if (method === "POST" || method === "PUT") {
+            const prev = method === "POST" ? { id: genId() } : db[collection].find((x) => x.id === id);
+            if (!prev) return send(res, 404, { error: "찾을 수 없습니다" });
+            const body = await readBody(req);
+            const secretKey = SECRET_OF[collection];
+            const secret = secretKey && body[secretKey];
+            if (secret && !dataKey) return send(res, 503, { error: "DATA_KEY가 설정되지 않았습니다" });
+            const item = { ...prev, ...normalize(collection, body), id: prev.id };
+            db[collection] = method === "POST" ? [...db[collection], item] : db[collection].map((x) => (x.id === id ? item : x));
+            if (secret) storeSecret(db, item.id, { [secretKey]: String(secret) });
             await store.writeDB(db);
             return send(res, 200, item);
         }
-        if (method === "PUT") {
-            const idx = db[collection].findIndex((x) => x.id === id);
-            if (idx === -1) return send(res, 404, { error: "찾을 수 없습니다" });
-            db[collection][idx] = { ...db[collection][idx], ...normalize(collection, await readBody(req)), id };
-            await store.writeDB(db);
-            return send(res, 200, db[collection][idx]);
-        }
         if (method === "DELETE") {
             if (collection === "banks") {
+                db.cards.filter((c) => c.bankId === id).forEach((c) => delete db.secrets[c.id]);
                 db.cards = db.cards.filter((c) => c.bankId !== id);
                 db.fixedExpenses = db.fixedExpenses.filter((e) => e.bankId !== id);
             }
             db[collection] = db[collection].filter((x) => x.id !== id);
+            delete db.secrets[id];
             await store.writeDB(db);
             return send(res, 200, { ok: true });
         }
