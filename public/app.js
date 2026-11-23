@@ -217,7 +217,9 @@ async function resetMonthly() {
         "이체 플랜 체크 상태와 이체 로그도 함께 삭제됩니다.",
         "수집된 거래 내역과 다른 기간 기록은 유지됩니다.",
     ]))) return;
+    await Promise.all(Object.values(window._transfersDone || {}).filter((d) => d.txId).map((d) => api("DELETE", `/api/transactions/${d.txId}`)));
     await api("DELETE", `/api/monthly/${selectedMonth}`);
+    await reload();
     renderMonthly();
     toast("success", "이 기간 기록이 초기화되었습니다");
 }
@@ -1498,7 +1500,11 @@ function useCollectedBalance(id) {
 
 async function renderMonthly() {
     if (!selectedMonth) selectedMonth = currentAnchor(cycleDay());
-    const [record, previous] = await Promise.all([api("GET", `/api/monthly/${selectedMonth}`), api("GET", `/api/monthly/${shiftMonth(selectedMonth, -1)}`)]);
+    const [record, previous, recentTxs] = await Promise.all([
+        api("GET", `/api/monthly/${selectedMonth}`),
+        api("GET", `/api/monthly/${shiftMonth(selectedMonth, -1)}`),
+        isOpenCycle() && fundSource() ? recentTransactions() : [],
+    ]);
     const current = record || { month: selectedMonth, balances: {}, payments: {}, expenses: [] };
     window._monthlyExpenses = current.expenses?.length
         ? current.expenses
@@ -1576,7 +1582,7 @@ async function renderMonthly() {
 
     renderMonthlyExpenses();
     renderSummary();
-    if (live) await restoreArrivedFund();
+    if (live) restoreArrivedFund(recentTxs);
 }
 
 const sumFilled = (vals) => {
@@ -1927,38 +1933,36 @@ function toggleTransferDone(key, checked) {
 }
 
 async function syncFundBalance(item, checked, snap) {
+    if (!checked && !snap?.txId) return;
     try {
         const r = checked
             ? await api("POST", "/api/transactions", { kind: "출금", amount: item.amount, at: stampNow(), bankId: item.fromId, title: `부족분 충당 → ${bankName(item.toId)}` })
-            : snap?.txId && (await api("DELETE", `/api/transactions/${snap.txId}`));
-        if (!r) return;
+            : await api("DELETE", `/api/transactions/${snap.txId}`);
         DB.currentBalances = r.currentBalances;
-        if (!checked) return;
-        snap.txId = r.transaction.id;
-        scheduleAutosave();
+        if (checked) {
+            snap.txId = r.transaction.id;
+            scheduleAutosave();
+        }
     } catch (e) {
         toast("error", e.message);
     }
 }
 
-async function restoreArrivedFund() {
+const recentTransactions = () => api("GET", `/api/transactions?from=${stampNow(new Date(Date.now() - 7 * 864e5)).slice(0, 10)}&to=${today()}`).catch(() => []);
+
+function restoreArrivedFund(txs) {
     const targetId = fundSource()?.fundTarget;
     const collected = DB.currentBalances?.[targetId];
     const input = document.querySelector(`[data-balance="${targetId}"]`);
     if (!collected || !input || window._balancesManual[targetId]) return;
-    const from = stampNow(new Date(Date.now() - 7 * 864e5)).slice(0, 10);
-    const txs = await api("GET", `/api/transactions?from=${from}&to=${today()}`).catch(() => []);
-    const last = txs.filter((t) => t.bankId === targetId && t.status === "ok").reduce((a, t) => (!a || t.at > a.at ? t : a), null);
-    if (!last?.inflow) return;
-    input.value = comma(collected.amount - last.amount);
+    const deposit = txs.filter((t) => t.bankId === targetId && t.inflow && t.status === "ok").reduce((a, t) => (!a || t.at > a.at ? t : a), null);
+    if (!deposit) return;
+    input.value = comma(collected.amount - deposit.amount);
     renderSummary();
     const step = window._planCtx.items[0];
-    if (step?.fund && step.amount === last.amount) {
-        document.querySelector(`[data-balance-badge="${targetId}"]`).innerHTML = `<span class="text-xs text-sky-500" title="${last.at} 입금 ${won(last.amount)}을 충당 단계로 보고 뺀 잔액">📥 충당 입금 전</span>`;
-        return;
-    }
-    input.value = comma(collected.amount);
-    renderSummary();
+    if (step?.fund && step.amount === deposit.amount)
+        document.querySelector(`[data-balance-badge="${targetId}"]`).innerHTML = `<span class="text-xs text-sky-500" title="${deposit.at} 입금 ${won(deposit.amount)}을 충당 단계로 보고 뺀 잔액">📥 충당 입금 전</span>`;
+    else useCollectedBalance(targetId);
 }
 
 async function clearTransferLog() {
@@ -3350,13 +3354,13 @@ async function runRestart() {
 
 let currentTab = "banks";
 
-async function showTab(name) {
+async function showTab(name, load = false) {
     currentTab = name;
-    localStorage.setItem("activeTab", name);
+    saveChoice("activeTab", name);
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
     document.querySelectorAll(".tab-panel").forEach((p) => p.classList.add("hidden"));
     document.getElementById(`tab-${name}`).classList.remove("hidden");
-    if (["ledger", "monthly", "trips"].includes(name)) await reload();
+    if (load || ["ledger", "monthly", "trips"].includes(name)) await reload();
     if (name === "ledger") renderLedger();
     if (name === "sales") renderSales();
     if (name === "addresses") loadAddresses();
@@ -3396,5 +3400,5 @@ async function loadStorageBadge() {
     }
 }
 
-showTab("ledger");
+showTab(savedChoice("activeTab", Object.fromEntries([...document.querySelectorAll(".tab-btn")].map((b) => [b.dataset.tab, 1]))), true);
 loadStorageBadge();
