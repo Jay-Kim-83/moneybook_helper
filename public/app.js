@@ -1672,6 +1672,18 @@ function renderSummary() {
     const expenseByBank = sumByBank(window._monthlyExpenses, (e) => e.bankId, (e) => toNum(e.amount));
 
     const plan = computeRelayPlan(balanceOf, paymentByBank, expenseByBank);
+    const { shortfalls } = plan;
+    const shortTotal = shortfalls.reduce((s, x) => s + x.amount, 0);
+    const depositBank = shortfalls.find(
+        ({ bank }) => !computeRelayPlan((id) => balanceOf(id) + (id === bank.id ? shortTotal : 0), paymentByBank, expenseByBank).shortfalls.length
+    )?.bank;
+    const shortAmount = `<b class="text-base text-red-600 tabular-nums">${won(shortTotal)}</b>`;
+    const depositNotice = shortTotal
+        ? `<div class="mb-3 px-3 py-2.5 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+            💰 <b>입금 필요</b> — ${depositBank ? `${depositBank.name}에 ${shortAmount}을 입금하면 이체 플랜대로 맞아떨어집니다.` : `합계 ${shortAmount}을 은행별로 나누어 입금해야 합니다.`}
+            ${shortfalls.length > 1 ? `<span class="block text-xs text-amber-700 mt-0.5">은행별 부족분(남길 금액 포함): ${shortfalls.map((s) => `${s.bank.name} ${won(s.amount)}`).join(" · ")}</span>` : ""}
+        </div>`
+        : "";
     const done = window._transfersDone || {};
     const modeEl = document.getElementById("balanceMode");
     if (modeEl)
@@ -1684,8 +1696,8 @@ function renderSummary() {
     const rows = DB.banks
         .map((b) => {
             const bal = balanceOf(b.id), pay = paymentByBank[b.id] || 0, exp = expenseByBank[b.id] || 0;
-            const inf = plan.inflow[b.id] || 0, out = plan.outflow[b.id] || 0;
-            const remain = bal + inf - pay - exp - out;
+            const inf = plan.inflow[b.id] || 0;
+            const remain = plan.remain[b.id];
             totals.bal += bal;
             totals.pay += pay;
             totals.exp += exp;
@@ -1770,6 +1782,7 @@ function renderSummary() {
             <h3 class="font-bold text-slate-700">⑤ 이체 플랜 <span class="text-xs font-normal text-slate-400">(위에서부터 순서대로 이체하고 체크)</span></h3>
             ${plan.items.length ? `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${doneCount === plan.items.length ? "bg-green-100 text-green-700" : "bg-indigo-50 text-indigo-700"}">${doneCount}/${plan.items.length} 완료</span>` : ""}
         </div>
+        ${depositNotice}
         ${plan.items.length ? planRows : '<p class="text-sm text-slate-400 py-2">이체할 항목이 없습니다. 잔액을 입력하면 플랜이 자동 계산됩니다.</p>'}
         ${(window._transferLog || []).length ? `
         <div class="mt-3 pt-3 border-t border-slate-200">
@@ -1805,7 +1818,11 @@ function computeRelayPlan(balanceOf, paymentByBank, expenseByBank) {
             outflow[b.id] = (outflow[b.id] || 0) + amount;
         }
     });
-    return { items, inflow, outflow };
+    const remain = Object.fromEntries(
+        DB.banks.map((b) => [b.id, balanceOf(b.id) + (inflow[b.id] || 0) - (paymentByBank[b.id] || 0) - (expenseByBank[b.id] || 0) - (outflow[b.id] || 0)])
+    );
+    const shortfalls = chain.map((b) => ({ bank: b, amount: (Number(b.retainAmount) || 0) - remain[b.id] })).filter((s) => s.amount > 0);
+    return { items, inflow, outflow, remain, shortfalls };
 }
 
 const monthlyPayload = () => {
