@@ -3162,6 +3162,13 @@ async function renderHistory() {
                     <button onclick="deleteMonth('${r.month}')" class="text-red-600 hover:underline text-sm">삭제</button>
                 </div>
             </div>
+            <div class="rounded-xl bg-slate-50 px-4 py-3 mb-3 flex items-end justify-between gap-2 flex-wrap">
+                <div>
+                    <p class="text-xs text-slate-500">총 지출 <span class="text-slate-400">(카드 결제 + 카드 외 지출)</span></p>
+                    <p class="text-2xl font-bold text-slate-800 tabular-nums">${won(planSpend)}</p>
+                </div>
+                <p class="leading-tight">${prev ? histDiff(planSpend, prevPay + prevExp) + `<span class="text-[10px] text-slate-400"> (전 기간 대비)</span>` : ""}</p>
+            </div>
             <p class="text-[11px] font-bold text-slate-400 mb-1">계획 (${day}일 입력 기준)</p>
             <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 ${histItem("총 잔액", bal, "text-slate-800")}
@@ -3170,13 +3177,15 @@ async function renderHistory() {
                 ${histItem("예상 잔액", remain, remain >= 0 ? "text-green-600" : "text-red-600")}
             </div>
             ${hasAct ? `
-            <p class="text-[11px] font-bold text-slate-400 mt-3 mb-1">실제 (문자 수집 기준, ${actuals[idx].length}건)</p>
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                ${histItem("입금", act.in, "text-green-600")}
-                ${histItem("출금", act.out, "text-red-500", planSpend ? histDiff(act.out, planSpend).replace("전기간과 동일", "계획과 동일") + `<span class="text-[10px] text-slate-400"> (계획 대비)</span>` : "")}
-                ${histItem("카드 승인", act.card, "text-purple-600")}
-                ${histItem("순변동", act.in - act.out, act.in - act.out >= 0 ? "text-slate-700" : "text-red-600")}
-            </div>` : ""}
+            <details class="mt-3 pt-3 border-t border-slate-100">
+                <summary class="text-xs font-bold text-slate-500 cursor-pointer select-none hover:text-indigo-600">문자 수집 기준 통장 흐름 ${act.n}건 <span class="font-normal text-slate-400">(통장 간 이체 포함 · 펼치기)</span></summary>
+                <div class="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    ${histItem("입금", act.in, "text-green-600")}
+                    ${histItem("출금", act.out, "text-red-500")}
+                    ${histItem("카드 승인", act.card, "text-purple-600")}
+                    ${histItem("통장 증감", act.in - act.out, act.in - act.out >= 0 ? "text-slate-700" : "text-red-600", `<span class="text-[10px] text-slate-400">입금 − 출금</span>`)}
+                </div>
+            </details>` : ""}
             ${(() => {
                 const payEntries = Object.entries(r.payments || {}).filter(([, v]) => Number(v));
                 const expEntries = (r.expenses || []).filter((e) => Number(e.amount));
