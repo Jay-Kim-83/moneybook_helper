@@ -742,13 +742,12 @@ function bankTxModal(bankId) {
     const rows = txs.length
         ? txs
               .map((t) => {
-                  const amt = t.kind === "해외" && t.fxAmount != null ? `${t.currency} ${t.fxAmount}` : t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
                   return `<div title="${String(t.raw || "").replace(/"/g, "&quot;").slice(0, 200)}" class="flex items-center gap-2 py-2 border-b border-slate-100 last:border-0 text-left">
                 <span class="text-[11px] text-slate-400 tabular-nums w-20 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-[11px] px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
                 <span class="flex-1 text-sm text-slate-700 truncate">${txLabel(t)}</span>
                 ${t.balance != null ? `<span class="text-[11px] text-sky-500 shrink-0">잔액 ${won(t.balance)}</span>` : ""}
-                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${txAmountCls(t)}">${txAmount(t)}</span>
             </div>`;
               })
               .join("")
@@ -911,6 +910,10 @@ async function editBalance(bankId) {
 
 const balanceSourceTag = (c) => `${c.manual ? "✏️" : c.est ? "≈" : "📩"} ${c.at.slice(5)}`;
 
+const txFlow = (t) => (t.kind === "이체" ? (t.inflow ? "입금" : "출금") : t.kind);
+const txAmount = (t) => (t.kind === "해외" && t.fxAmount != null ? `${t.currency} ${t.fxAmount}` : t.amount == null ? "—" : ({ 입금: "+", 출금: "−", 카드: "−" }[txFlow(t)] || "") + won(Math.abs(t.amount)));
+const txAmountCls = (t) => ({ 입금: "text-green-600", 출금: "text-red-500", 카드: "text-purple-600", 해외: "text-teal-600" })[txFlow(t)] || "text-slate-400";
+
 const LEDGER_KINDS = [
     { key: "입금", sign: "+", amtCls: "text-green-600" },
     { key: "출금", sign: "−", amtCls: "text-red-500" },
@@ -1043,7 +1046,6 @@ function drawLedger() {
         ? shown
               .map((t, i) => {
                   const srcs = [t.bankId ? bankName(t.bankId) : "", t.cardId ? DB.cards.find((c) => c.id === t.cardId)?.company || "" : ""].filter(Boolean).join(" · ");
-                  const amt = t.kind === "해외" && t.fxAmount != null ? `${t.currency} ${t.fxAmount}` : t.amount == null ? "—" : (t.kind === "입금" ? "+" : t.kind === "출금" || t.kind === "카드" ? "−" : "") + won(Math.abs(t.amount));
                   return `<div onclick="showTxRaw(${i})" class="flex items-center gap-3 py-2.5 border-b border-slate-100 last:border-0 cursor-pointer hover:bg-slate-50 ${t.status === "pending" ? "opacity-60" : ""}">
                 <span class="text-xs text-slate-400 tabular-nums w-24 shrink-0">${String(t.at).slice(5)}</span>
                 <span class="text-xs px-1.5 py-0.5 rounded shrink-0 ${kindCls[t.kind] || kindCls.이체}">${t.kind}</span>
@@ -1052,7 +1054,7 @@ function drawLedger() {
                     ${t.balance != null ? `<span class="text-xs text-sky-500">잔액 ${won(t.balance)}</span>` : ""}
                     ${links[t.id] ? `<span class="text-xs text-teal-600">🧳 ${esc(links[t.id])}</span>` : ""}
                 </span>
-                <span class="font-bold tabular-nums text-sm shrink-0 ${t.kind === "입금" ? "text-green-600" : t.kind === "출금" ? "text-red-500" : t.kind === "카드" ? "text-purple-600" : t.kind === "해외" ? "text-teal-600" : "text-slate-400"}">${amt}</span>
+                <span class="font-bold tabular-nums text-sm shrink-0 ${txAmountCls(t)}">${txAmount(t)}</span>
             </div>`;
               })
               .join("")
