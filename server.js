@@ -563,7 +563,7 @@ const parseSms = (sender, text, db) => {
         const bankIn = (hay) =>
             db.banks.find((b) => [b.name, b.name?.replace(/은행/g, ""), b.alias].filter((n) => n && n.length >= 2).some((n) => hay.includes(n)));
         const own = t.match(/내\s*(\S+)\s*통장/);
-        const hit = (own && bankIn(own[1])) || bankIn(sender + " " + t);
+        const hit = (own && bankIn(own[1])) || bankIn(sender) || bankIn(sender + " " + t);
         if (hit) bankId = hit.id;
     }
     const bankObj = db.banks.find((b) => b.id === bankId);
